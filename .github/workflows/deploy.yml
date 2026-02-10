@@ -26,17 +26,23 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm ci
-      - run: npm run build
+      - name: Install dependencies
+        run: npm install
 
-      # Copy PWA files to build output
-      - run: cp public/sw.js dist/
-      - run: cp public/manifest.json dist/
-      - run: cp -r public/icons dist/
+      - name: Build
+        run: npm run build
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Copy PWA files to dist
+        run: |
+          cp public/sw.js dist/
+          cp public/manifest.json dist/
+          cp -r public/icons dist/
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
-      - id: deployment
+      - name: Deploy
+        id: deployment
         uses: actions/deploy-pages@v4
