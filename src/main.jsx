@@ -2,12 +2,14 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 
-// Polyfill window.storage API (used in artifact) → localStorage
 if (!window.storage) {
   window.storage = {
     async get(key) {
-      const val = localStorage.getItem(key);
-      return val !== null ? { key, value: val } : null;
+      try {
+        const val = localStorage.getItem(key);
+        if (val === null) throw new Error('not found');
+        return { key, value: val };
+      } catch (e) { throw e; }
     },
     async set(key, value) {
       localStorage.setItem(key, value);
@@ -28,8 +30,4 @@ if (!window.storage) {
   };
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-)
+ReactDOM.createRoot(document.getElementById('root')).render(<App />)
