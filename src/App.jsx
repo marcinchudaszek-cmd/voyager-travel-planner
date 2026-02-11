@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-const TABS = ["Przegląd","Mapa","Miejsca","Plan dnia","Budżet","Notatki"];
-const ICONS = {"Przegląd":"📋","Mapa":"🗺️","Miejsca":"📍","Plan dnia":"🗓️","Budżet":"💰","Notatki":"📝"};
-const CURRENCIES = ["PLN","EUR","USD","GBP","CZK","CHF"];
+const TABS = ["Przegląd","Mapa","Miejsca","Plan dnia","Budżet","Pakowanie","Notatki"];
+const ICONS = {"Przegląd":"📋","Mapa":"🗺️","Miejsca":"📍","Plan dnia":"🗓️","Budżet":"💰","Pakowanie":"🎒","Notatki":"📝"};
+const CURRENCIES = ["PLN","EUR","USD","GBP","CZK","CHF","SEK","NOK","DKK","HUF","TRY","JPY","THB"];
 const CATEGORIES = ["Transport","Nocleg","Jedzenie","Atrakcje","Zakupy","Inne"];
 const CAT_ICONS = {Transport:"✈️",Nocleg:"🏨",Jedzenie:"🍽️",Atrakcje:"🎭",Zakupy:"🛍️",Inne:"📦"};
 const CAT_COLORS = {Transport:"#4A90D9",Nocleg:"#8B5CF6",Jedzenie:"#F59E0B",Atrakcje:"#EC4899",Zakupy:"#10B981",Inne:"#6B7280"};
@@ -10,15 +10,20 @@ const PRI_COLORS = {high:"#ef4444",medium:"#f59e0b",low:"#22c55e"};
 const WMO_ICONS = {0:"☀️",1:"🌤️",2:"⛅",3:"☁️",45:"🌫️",48:"🌫️",51:"🌦️",53:"🌧️",55:"🌧️",61:"🌧️",63:"🌧️",65:"🌧️",71:"🌨️",73:"🌨️",75:"❄️",80:"🌦️",81:"🌧️",82:"⛈️",95:"⛈️"};
 const WMO_TEXT = {0:"Słonecznie",1:"Lekkie chmury",2:"Częściowe zachmurzenie",3:"Pochmurno",45:"Mgła",51:"Mżawka",61:"Lekki deszcz",63:"Deszcz",65:"Silny deszcz",71:"Lekki śnieg",73:"Śnieg",75:"Silny śnieg",80:"Przelotny deszcz",82:"Ulewa",95:"Burza"};
 
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
-const defaultTrip = () => ({id:uid(),name:"",destination:"",startDate:"",endDate:"",coverEmoji:"✈️",places:[],itinerary:[],expenses:[],notes:[],currency:"PLN",destLat:null,destLng:null});
+const PACK_TEMPLATES = {
+  "Dokumenty":["Paszport / dowód","Bilety lotnicze","Ubezpieczenie","Kopie dokumentów","Gotówka / karty","Prawo jazdy"],
+  "Ubrania":["Koszulki","Spodnie","Bielizna","Skarpetki","Kurtka","Piżama","Buty wygodne","Buty eleganckie"],
+  "Higiena":["Szczoteczka do zębów","Pasta","Szampon","Żel pod prysznic","Dezodorant","Krem z filtrem","Leki osobiste"],
+  "Elektronika":["Telefon + ładowarka","Powerbank","Adapter do gniazdka","Słuchawki","Aparat foto"],
+  "Apteczka":["Plastry","Środki przeciwbólowe","Leki na żołądek","Środki na komary","Termometr"],
+  "Inne":["Okulary przeciwsłoneczne","Parasol","Torba na plażę","Książka / czytnik","Przekąski na drogę"]
+};
 
-function saveTrips(trips) {
-  try { localStorage.setItem("voyager-data", JSON.stringify(trips)); } catch(e) {}
-}
-function loadTrips() {
-  try { const d = localStorage.getItem("voyager-data"); return d ? JSON.parse(d) : []; } catch(e) { return []; }
-}
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const defaultTrip = () => ({id:uid(),name:"",destination:"",startDate:"",endDate:"",coverEmoji:"✈️",places:[],itinerary:[],expenses:[],notes:[],packing:[],currency:"PLN",destLat:null,destLng:null});
+
+function saveTrips(trips) { try{localStorage.setItem("voyager-data",JSON.stringify(trips))}catch(e){} }
+function loadTrips() { try{const d=localStorage.getItem("voyager-data");return d?JSON.parse(d):[]}catch(e){return[]} }
 
 const compressImage = (file, maxDim=800, quality=0.6) => new Promise((resolve) => {
   const reader = new FileReader();
@@ -26,10 +31,9 @@ const compressImage = (file, maxDim=800, quality=0.6) => new Promise((resolve) =
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement("canvas");
-      let w=img.width, h=img.height;
+      let w=img.width,h=img.height;
       if(w>maxDim||h>maxDim){if(w>h){h=(h/w)*maxDim;w=maxDim}else{w=(w/h)*maxDim;h=maxDim}}
-      canvas.width=w;canvas.height=h;
-      canvas.getContext("2d").drawImage(img,0,0,w,h);
+      canvas.width=w;canvas.height=h;canvas.getContext("2d").drawImage(img,0,0,w,h);
       resolve(canvas.toDataURL("image/jpeg",quality));
     };
     img.src = e.target.result;
@@ -37,16 +41,59 @@ const compressImage = (file, maxDim=800, quality=0.6) => new Promise((resolve) =
   reader.readAsDataURL(file);
 });
 
-/* ═══════════ WEATHER ═══════════ */
-function WeatherWidget({lat,lng,destination}) {
+/* ═══════════ COUNTDOWN ═══════════ */
+function Countdown({startDate}) {
+  const [now,setNow]=useState(new Date());
+  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),60000);return()=>clearInterval(t)},[]);
+  if(!startDate) return null;
+  const start=new Date(startDate+"T00:00:00");
+  const diff=start-now;
+  if(diff<=0) {
+    const end = new Date(startDate);
+    return <div style={cdS.box}><div style={cdS.live}>🎉 Podróż w toku!</div></div>;
+  }
+  const days=Math.floor(diff/864e5);
+  const hours=Math.floor((diff%864e5)/36e5);
+  return (
+    <div style={cdS.box}>
+      <div style={{fontSize:13,color:"#64748b",marginBottom:8,fontWeight:600}}>⏳ Do wyjazdu pozostało</div>
+      <div style={cdS.nums}>
+        <div style={cdS.unit}><div style={cdS.val}>{days}</div><div style={cdS.lbl}>dni</div></div>
+        <div style={{fontSize:24,color:"#cbd5e1",fontWeight:300}}>:</div>
+        <div style={cdS.unit}><div style={cdS.val}>{hours}</div><div style={cdS.lbl}>godz.</div></div>
+      </div>
+    </div>
+  );
+}
+const cdS={box:{background:"linear-gradient(135deg,#1e3a5f,#2d5a8a)",borderRadius:14,padding:20,marginBottom:12,textAlign:"center"},
+  nums:{display:"flex",justifyContent:"center",alignItems:"center",gap:12},
+  unit:{display:"flex",flexDirection:"column",alignItems:"center"},
+  val:{fontSize:36,fontWeight:700,color:"#fff",fontFamily:"'DM Mono',monospace",lineHeight:1},
+  lbl:{fontSize:11,color:"rgba(255,255,255,.6)",marginTop:4,fontWeight:500},
+  live:{fontSize:18,fontWeight:700,color:"#fff",padding:"8px 0"}};
+
+/* ═══════════ WEATHER (FIXED) ═══════════ */
+function WeatherWidget({lat,lng,destination,onGeocode}) {
   const [weather,setWeather]=useState(null);
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState(null);
+  const [geoLoading,setGeoLoading]=useState(false);
   const mounted=useRef(true);
+
+  const doGeocode = async () => {
+    if(!destination)return;
+    setGeoLoading(true);
+    try{
+      const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destination)}&limit=1`);
+      const d=await r.json();
+      if(d[0]&&onGeocode)onGeocode(+d[0].lat,+d[0].lon);
+    }catch{}
+    setGeoLoading(false);
+  };
 
   useEffect(()=>{
     mounted.current=true;
-    if(!lat||!lng) return;
+    if(!lat||!lng)return;
     setLoading(true);setError(null);
     fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode,wind_speed_10m_max&current=temperature_2m,weathercode,relative_humidity_2m,wind_speed_10m&timezone=auto&forecast_days=7`)
       .then(r=>r.json()).then(data=>{if(mounted.current){if(data.daily)setWeather(data);else setError("Brak danych")}})
@@ -55,13 +102,21 @@ function WeatherWidget({lat,lng,destination}) {
     return()=>{mounted.current=false};
   },[lat,lng]);
 
-  if(!lat||!lng) return <div style={wS.box}><div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda</span></div><p style={{color:"#94a3b8",fontSize:13,textAlign:"center",padding:"16px 0"}}>Ustaw cel podróży, aby zobaczyć prognozę</p></div>;
-  if(loading) return <div style={wS.box}><div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda — {destination}</span></div><div style={{textAlign:"center",padding:"20px 0",color:"#94a3b8"}}>Ładowanie...</div></div>;
+  if(!lat||!lng) return (
+    <div style={wS.box}><div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda</span></div>
+      <div style={{padding:16,textAlign:"center"}}>
+        <p style={{color:"#94a3b8",fontSize:13,marginBottom:12}}>Brak współrzędnych GPS dla celu podróży</p>
+        {destination&&<button onClick={doGeocode} disabled={geoLoading} style={{...s.b1,padding:"10px 20px",fontSize:13}}>{geoLoading?"⏳ Szukam...":"📍 Znajdź lokalizację: "+destination}</button>}
+      </div>
+    </div>
+  );
+
+  if(loading) return <div style={wS.box}><div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda — {destination}</span></div><div style={{textAlign:"center",padding:"20px 0",color:"#94a3b8"}}>⏳ Ładowanie prognozy...</div></div>;
   if(error) return <div style={wS.box}><div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda</span></div><p style={{color:"#ef4444",fontSize:13,textAlign:"center",padding:"16px 0"}}>⚠️ {error}</p></div>;
   if(!weather) return null;
 
-  const cur=weather.current, d=weather.daily;
-  const days=["Nd","Pn","Wt","Śr","Cz","Pt","Sb"];
+  const cur=weather.current,d=weather.daily;
+  const dayNames=["Nd","Pn","Wt","Śr","Cz","Pt","Sb"];
   return (
     <div style={wS.box}>
       <div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda — {destination}</span></div>
@@ -70,13 +125,13 @@ function WeatherWidget({lat,lng,destination}) {
         <div>
           <div style={{fontSize:36,fontWeight:700,fontFamily:"'DM Mono',monospace"}}>{Math.round(cur.temperature_2m)}°C</div>
           <div style={{fontSize:14,color:"#475569"}}>{WMO_TEXT[cur.weathercode]||"—"}</div>
-          <div style={{fontSize:12,color:"#94a3b8",marginTop:4}}>💧 {cur.relative_humidity_2m}% 💨 {Math.round(cur.wind_speed_10m)} km/h</div>
+          <div style={{fontSize:12,color:"#94a3b8",marginTop:4}}>💧 {cur.relative_humidity_2m}%  💨 {Math.round(cur.wind_speed_10m)} km/h</div>
         </div>
       </div>
       <div style={{display:"flex",overflowX:"auto",gap:4,padding:"4px 8px 12px"}}>
         {d.time.map((date,i)=>{const dt=new Date(date+"T12:00:00");return(
           <div key={i} style={{flex:"0 0 auto",width:64,textAlign:"center",padding:"8px 4px",borderRadius:10,background:"#f8fafc"}}>
-            <div style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4}}>{i===0?"Dziś":days[dt.getDay()]}</div>
+            <div style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4}}>{i===0?"Dziś":dayNames[dt.getDay()]}</div>
             <div style={{fontSize:22}}>{WMO_ICONS[d.weathercode[i]]||"🌡️"}</div>
             <div style={{fontSize:13,fontWeight:700,marginTop:4}}>{Math.round(d.temperature_2m_max[i])}°</div>
             <div style={{fontSize:11,color:"#94a3b8"}}>{Math.round(d.temperature_2m_min[i])}°</div>
@@ -87,6 +142,47 @@ function WeatherWidget({lat,lng,destination}) {
   );
 }
 const wS={box:{background:"#fff",borderRadius:14,border:"1px solid rgba(0,0,0,.06)",marginBottom:12,overflow:"hidden"},hdr:{display:"flex",alignItems:"center",gap:8,padding:"14px 16px",borderBottom:"1px solid #f1f5f9",fontSize:15}};
+
+/* ═══════════ CURRENCY CONVERTER ═══════════ */
+function CurrencyConverter({baseCurrency}) {
+  const [amount,setAmount]=useState("100");
+  const [from,setFrom]=useState(baseCurrency||"PLN");
+  const [to,setTo]=useState(baseCurrency==="EUR"?"PLN":"EUR");
+  const [rate,setRate]=useState(null);
+  const [loading,setLoading]=useState(false);
+
+  const convert = async () => {
+    if(!amount)return;
+    setLoading(true);
+    try{
+      const r=await fetch(`https://api.frankfurter.dev/v1/latest?amount=${amount}&from=${from}&to=${to}`);
+      const d=await r.json();
+      if(d.rates&&d.rates[to])setRate(d.rates[to]);
+      else setRate(null);
+    }catch{setRate(null)}
+    setLoading(false);
+  };
+
+  useEffect(()=>{if(amount&&from!==to)convert()},[from,to]);
+
+  return(
+    <div style={{background:"#fff",borderRadius:14,padding:16,border:"1px solid rgba(0,0,0,.06)",marginBottom:16}}>
+      <h3 style={{fontSize:15,fontWeight:700,marginBottom:12}}>💱 Przelicznik walut</h3>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} style={{...s.inp,flex:1,minWidth:80,marginBottom:0}} placeholder="Kwota"/>
+        <select value={from} onChange={e=>setFrom(e.target.value)} style={{...s.inp,width:80,flex:"none",marginBottom:0}}>{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select>
+        <button onClick={()=>{const t=from;setFrom(to);setTo(t)}} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",padding:4}}>⇄</button>
+        <select value={to} onChange={e=>setTo(e.target.value)} style={{...s.inp,width:80,flex:"none",marginBottom:0}}>{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select>
+        <button onClick={convert} disabled={loading||from===to} style={{background:"#1e3a5f",color:"#fff",border:"none",padding:"10px 16px",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>{loading?"⏳":"Przelicz"}</button>
+      </div>
+      {rate!==null&&<div style={{marginTop:12,textAlign:"center",padding:12,background:"#f0f7ff",borderRadius:10}}>
+        <div style={{fontSize:14,color:"#64748b"}}>{amount} {from} =</div>
+        <div style={{fontSize:28,fontWeight:700,fontFamily:"'DM Mono',monospace",color:"#1e3a5f"}}>{rate.toFixed(2)} {to}</div>
+      </div>}
+      {from===to&&<p style={{fontSize:12,color:"#94a3b8",marginTop:8,textAlign:"center"}}>Wybierz różne waluty</p>}
+    </div>
+  );
+}
 
 /* ═══════════ PHOTO UPLOAD ═══════════ */
 function PhotoUpload({photos,onChange}) {
@@ -111,7 +207,7 @@ function PhotoUpload({photos,onChange}) {
   </div>);
 }
 
-/* ═══════════ LEAFLET MAP ═══════════ */
+/* ═══════════ TRIP MAP (FIXED Z-INDEX) ═══════════ */
 function TripMap({trip,onAddPlace}) {
   const containerRef=useRef(null);
   const mapRef=useRef(null);
@@ -124,7 +220,6 @@ function TripMap({trip,onAddPlace}) {
   const [clickPos,setClickPos]=useState(null);
   const [newName,setNewName]=useState("");
 
-  // Load Leaflet
   useEffect(()=>{
     if(window.L){setReady(true);return}
     const css=document.createElement("link");css.rel="stylesheet";css.href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";document.head.appendChild(css);
@@ -132,25 +227,20 @@ function TripMap({trip,onAddPlace}) {
     js.onload=()=>setReady(true);document.head.appendChild(js);
   },[]);
 
-  // Init map
   useEffect(()=>{
-    if(!ready||!containerRef.current||mapRef.current) return;
+    if(!ready||!containerRef.current||mapRef.current)return;
     const L=window.L;
     const map=L.map(containerRef.current,{zoomControl:false}).setView([52,19],6);
     L.control.zoom({position:"bottomright"}).addTo(map);
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",{attribution:'© OSM © CARTO',maxZoom:19}).addTo(map);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",{attribution:'© OSM',maxZoom:19}).addTo(map);
     markersRef.current=L.layerGroup().addTo(map);
     map.on("click",e=>{setClickPos({lat:e.latlng.lat,lng:e.latlng.lng});setNewName("")});
     mapRef.current=map;
     if(trip.destLat&&trip.destLng)map.setView([trip.destLat,trip.destLng],10);
     else if(trip.destination)fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(trip.destination)}&limit=1`).then(r=>r.json()).then(d=>{if(d[0]&&mapRef.current)mapRef.current.setView([+d[0].lat,+d[0].lon],10)}).catch(()=>{});
-    return()=>{
-      if(mapRef.current){try{mapRef.current.remove()}catch(e){}}
-      mapRef.current=null;markersRef.current=null;
-    };
+    return()=>{if(mapRef.current){try{mapRef.current.remove()}catch(e){}}mapRef.current=null;markersRef.current=null};
   },[ready]);
 
-  // Sync markers
   useEffect(()=>{
     if(!mapRef.current||!window.L||!markersRef.current)return;
     const L=window.L;
@@ -166,13 +256,11 @@ function TripMap({trip,onAddPlace}) {
     else if(geo.length===1)try{mapRef.current.setView([geo[0].lat,geo[0].lng],13)}catch(e){}
   },[trip.places,ready]);
 
-  // Click marker
   useEffect(()=>{
     if(!mapRef.current||!window.L)return;
     if(clickMkRef.current){try{mapRef.current.removeLayer(clickMkRef.current)}catch(e){};clickMkRef.current=null}
     if(!clickPos)return;
-    const L=window.L;
-    clickMkRef.current=L.marker([clickPos.lat,clickPos.lng],{icon:L.divIcon({className:"",iconSize:[0,0],
+    clickMkRef.current=window.L.marker([clickPos.lat,clickPos.lng],{icon:window.L.divIcon({className:"",iconSize:[0,0],
       html:`<div style="width:22px;height:22px;border-radius:50%;background:#ef4444;border:3px solid #fff;box-shadow:0 2px 10px rgba(239,68,68,.5);transform:translate(-11px,-11px)"></div>`
     })}).addTo(mapRef.current);
   },[clickPos]);
@@ -216,51 +304,80 @@ function TripMap({trip,onAddPlace}) {
   );
 }
 
-/* ═══════════ MINI MAP ═══════════ */
 function MiniMap({trip}) {
-  const ref=useRef(null);
-  const mapInst=useRef(null);
-  const [mapReady,setMapReady]=useState(false);
-
-  useEffect(()=>{
-    if(window.L)setMapReady(true);
-    else{
-      const check=setInterval(()=>{if(window.L){setMapReady(true);clearInterval(check)}},200);
-      return()=>clearInterval(check);
-    }
-  },[]);
-
+  const ref=useRef(null);const mapInst=useRef(null);const [mapReady,setMapReady]=useState(false);
+  useEffect(()=>{if(window.L)setMapReady(true);else{const c=setInterval(()=>{if(window.L){setMapReady(true);clearInterval(c)}},200);return()=>clearInterval(c)}},[]);
   useEffect(()=>{
     if(!mapReady||!ref.current||mapInst.current)return;
-    const L=window.L;
-    const geo=trip.places.filter(p=>p.lat&&p.lng);
-    if(!geo.length)return;
+    const geo=trip.places.filter(p=>p.lat&&p.lng);if(!geo.length)return;
     try{
-      const map=L.map(ref.current,{zoomControl:false,attributionControl:false,dragging:false,scrollWheelZoom:false,touchZoom:false,doubleClickZoom:false});
+      const L=window.L;const map=L.map(ref.current,{zoomControl:false,attributionControl:false,dragging:false,scrollWheelZoom:false,touchZoom:false,doubleClickZoom:false});
       L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",{maxZoom:19}).addTo(map);
       geo.forEach(p=>L.marker([p.lat,p.lng],{icon:L.divIcon({className:"",iconSize:[0,0],html:`<div style="width:12px;height:12px;border-radius:50%;background:${PRI_COLORS[p.priority]||"#1e3a5f"};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3);transform:translate(-6px,-6px)"></div>`})}).addTo(map));
-      if(geo.length>1)map.fitBounds(L.latLngBounds(geo.map(p=>[p.lat,p.lng])).pad(.3));
-      else map.setView([geo[0].lat,geo[0].lng],12);
+      if(geo.length>1)map.fitBounds(L.latLngBounds(geo.map(p=>[p.lat,p.lng])).pad(.3));else map.setView([geo[0].lat,geo[0].lng],12);
       mapInst.current=map;
     }catch(e){}
     return()=>{if(mapInst.current){try{mapInst.current.remove()}catch(e){}}mapInst.current=null};
   },[mapReady,trip.places]);
-
   return <div ref={ref} style={{width:"100%",height:"100%"}}/>;
+}
+
+/* ═══════════ PDF EXPORT ═══════════ */
+function exportPDF(trip) {
+  const days=trip.startDate&&trip.endDate?Math.ceil((new Date(trip.endDate)-new Date(trip.startDate))/864e5)+1:0;
+  const spent=trip.expenses.reduce((s,e)=>s+e.amount,0);
+  const byCat=CATEGORIES.map(c=>({c,t:trip.expenses.filter(e=>e.category===c).reduce((s,e)=>s+e.amount,0)})).filter(x=>x.t>0);
+
+  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${trip.name} — Voyager</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:700px;margin:0 auto;padding:24px;color:#1e293b;font-size:13px}
+h1{font-size:24px;margin-bottom:4px}h2{font-size:16px;margin-top:24px;border-bottom:2px solid #1e3a5f;padding-bottom:4px;color:#1e3a5f}
+h3{font-size:14px;margin-top:16px}
+.subtitle{color:#64748b;font-size:14px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+.stat{background:#f1f5f9;padding:12px;border-radius:8px;text-align:center}
+.stat-val{font-size:22px;font-weight:700}.stat-lbl{font-size:11px;color:#64748b}
+table{width:100%;border-collapse:collapse;margin:8px 0}
+th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:12px}
+th{background:#f1f5f9;font-weight:600}
+.check{margin-right:6px}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+@media print{body{padding:12px}h1{font-size:20px}}
+</style></head><body>
+<h1>${trip.coverEmoji} ${trip.name}</h1>
+<div class="subtitle">${trip.destination||""}${trip.startDate?` • ${trip.startDate} → ${trip.endDate}`:""}</div>
+<div class="grid">
+<div class="stat"><div class="stat-val">📍 ${trip.places.length}</div><div class="stat-lbl">Miejsc</div></div>
+<div class="stat"><div class="stat-val">📅 ${days||"—"}</div><div class="stat-lbl">Dni</div></div>
+<div class="stat"><div class="stat-val">💰 ${spent.toFixed(0)}</div><div class="stat-lbl">${trip.currency}</div></div>
+<div class="stat"><div class="stat-val">📝 ${trip.notes.length}</div><div class="stat-lbl">Notatek</div></div>
+</div>
+${trip.places.length?`<h2>📍 Miejsca</h2><table><tr><th>Nazwa</th><th>Priorytet</th><th>Status</th></tr>
+${trip.places.map(p=>`<tr><td>${p.name}${p.description?` — ${p.description}`:""}</td><td>${p.priority==="high"?"⬆️ Wysoki":p.priority==="medium"?"➡️ Średni":"⬇️ Niski"}</td><td>${p.visited?"✅ Odwiedzone":"⬜"}</td></tr>`).join("")}</table>`:""}
+${trip.itinerary.length?`<h2>🗓️ Plan dnia</h2>${trip.itinerary.map(d=>`<h3>${d.day}${d.title?" — "+d.title:""}</h3><table><tr><th>Czas</th><th>Aktywność</th></tr>${d.items.filter(i=>i.activity).map(i=>`<tr><td>${i.time}</td><td>${i.activity}</td></tr>`).join("")}</table>`).join("")}`:""}
+${byCat.length?`<h2>💰 Budżet (${spent.toFixed(2)} ${trip.currency})</h2><table><tr><th>Kategoria</th><th>Kwota</th><th>%</th></tr>
+${byCat.map(({c,t})=>`<tr><td>${CAT_ICONS[c]} ${c}</td><td>${t.toFixed(2)} ${trip.currency}</td><td>${(t/spent*100).toFixed(0)}%</td></tr>`).join("")}</table>
+${trip.expenses.length?`<h3>Szczegóły wydatków</h3><table><tr><th>Data</th><th>Opis</th><th>Kategoria</th><th>Kwota</th></tr>
+${[...trip.expenses].sort((a,b)=>a.date.localeCompare(b.date)).map(e=>`<tr><td>${e.date}</td><td>${e.name}</td><td>${e.category}</td><td>${e.amount.toFixed(2)}</td></tr>`).join("")}</table>`:""}`:""}
+${trip.packing&&trip.packing.length?`<h2>🎒 Lista pakowania</h2><table><tr><th>Rzecz</th><th>Kategoria</th><th>Status</th></tr>
+${trip.packing.map(p=>`<tr><td>${p.name}</td><td>${p.category}</td><td>${p.packed?"✅":"⬜"}</td></tr>`).join("")}</table>`:""}
+${trip.notes.length?`<h2>📝 Notatki</h2>${trip.notes.map(n=>`<div style="margin:12px 0;padding:12px;background:#f8fafc;border-radius:8px"><strong>${n.title}</strong><p style="margin:4px 0;color:#475569">${n.content}</p><div style="font-size:11px;color:#94a3b8">${n.date}</div></div>`).join("")}`:""}
+<div style="margin-top:32px;text-align:center;color:#94a3b8;font-size:11px">🧭 Wygenerowano przez Voyager</div>
+</body></html>`;
+
+  const w=window.open("","_blank");
+  w.document.write(html);
+  w.document.close();
+  setTimeout(()=>w.print(),500);
 }
 
 /* ═══════════ AI CHAT ═══════════ */
 function AIChat({trip,onClose}) {
-  const [msgs,setMsgs]=useState([{role:"assistant",text:`Cześć! 🌍 Asystent podróży${trip?.destination?` do ${trip.destination}`:""}. Zapytaj o miejsca, restauracje, budżet, plan dnia!`}]);
-  const [input,setInput]=useState("");
-  const [loading,setLoading]=useState(false);
-  const endRef=useRef(null);
-
+  const [msgs,setMsgs]=useState([{role:"assistant",text:`Cześć! 🌍 Asystent podróży${trip?.destination?` do ${trip.destination}`:""}. Zapytaj o cokolwiek!`}]);
+  const [input,setInput]=useState("");const [loading,setLoading]=useState(false);const endRef=useRef(null);
   useEffect(()=>{if(endRef.current)endRef.current.scrollIntoView({behavior:"smooth"})},[msgs]);
-
   const send=async()=>{
-    if(!input.trim()||loading)return;
-    const txt=input.trim();setInput("");
+    if(!input.trim()||loading)return;const txt=input.trim();setInput("");
     setMsgs(m=>[...m,{role:"user",text:txt}]);setLoading(true);
     try{
       const ctx=trip?`Podróż do ${trip.destination||"?"} (${trip.startDate||"?"}–${trip.endDate||"?"}). Waluta: ${trip.currency}. Miejsca: ${trip.places.map(p=>p.name).join(", ")||"brak"}.`:"";
@@ -269,17 +386,13 @@ function AIChat({trip,onClose}) {
           messages:[...msgs.filter(m=>m.role==="user").map(m=>({role:"user",content:m.text})),{role:"user",content:txt}]})});
       const data=await res.json();
       setMsgs(m=>[...m,{role:"assistant",text:data.content?.map(c=>c.text||"").join("")||"Przepraszam, błąd."}]);
-    }catch{setMsgs(m=>[...m,{role:"assistant",text:"⚠️ Błąd połączenia z AI."}])}
-    setLoading(false);
+    }catch{setMsgs(m=>[...m,{role:"assistant",text:"⚠️ Błąd połączenia z AI."}])}setLoading(false);
   };
-
   return(
     <div style={s.aiO}><div style={s.aiP}>
       <div style={s.aiH}><span style={{fontSize:20}}>🤖 Asystent AI</span><button onClick={onClose} style={s.clB}>✕</button></div>
       <div style={s.aiM}>{msgs.map((m,i)=><div key={i} style={{...s.bbl,...(m.role==="user"?s.uB:s.aB)}}><div style={{whiteSpace:"pre-wrap",lineHeight:1.5}}>{m.text}</div></div>)}
-        {loading&&<div style={{...s.bbl,...s.aB,color:"#94a3b8"}}>● ● ●</div>}
-        <div ref={endRef}/>
-      </div>
+        {loading&&<div style={{...s.bbl,...s.aB,color:"#94a3b8"}}>● ● ●</div>}<div ref={endRef}/></div>
       <div style={s.aiR}><input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Zapytaj..." style={s.aiI}/><button onClick={send} disabled={loading} style={s.snB}>➤</button></div>
     </div></div>
   );
@@ -303,17 +416,26 @@ export default function TravelPlanner() {
   const TripForm=()=>{
     const [f,sF]=useState(edit||defaultTrip());
     const em=["✈️","🏖️","🏔️","🌍","🗼","🏛️","🎡","🚗","🛳️","🌴","🏕️","🎿"];
+    const [geoStatus,setGeoStatus]=useState(f.destLat?"✅":"");
+
     const geocode=async(dest)=>{
       if(!dest.trim())return;
-      try{const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}&limit=1`);const d=await r.json();if(d[0])sF(prev=>({...prev,destLat:+d[0].lat,destLng:+d[0].lon}))}catch{}
+      setGeoStatus("⏳");
+      try{
+        const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}&limit=1`);
+        const d=await r.json();
+        if(d[0]){sF(prev=>({...prev,destLat:+d[0].lat,destLng:+d[0].lon}));setGeoStatus("✅")}
+        else setGeoStatus("❌");
+      }catch{setGeoStatus("❌")}
     };
+
     return <div style={s.modal}><div style={s.mc}>
       <h3 style={s.fT}>{edit?"Edytuj":"Nowa"} podróż ✈️</h3>
       <div style={s.eR}>{em.map(e=><button key={e} onClick={()=>sF({...f,coverEmoji:e})} style={{...s.eB,...(f.coverEmoji===e?s.eBA:{})}}>{e}</button>)}</div>
       <input placeholder="Nazwa podróży" value={f.name} onChange={e=>sF({...f,name:e.target.value})} style={s.inp}/>
       <div style={{position:"relative"}}>
-        <input placeholder="Cel (miasto/kraj)" value={f.destination} onChange={e=>sF({...f,destination:e.target.value})} onBlur={e=>geocode(e.target.value)} style={s.inp}/>
-        {f.destLat&&<div style={{position:"absolute",right:12,top:12,fontSize:11,color:"#22c55e",fontWeight:600}}>✅ GPS</div>}
+        <input placeholder="Cel (miasto/kraj)" value={f.destination} onChange={e=>{sF({...f,destination:e.target.value});setGeoStatus("")}} onBlur={e=>geocode(e.target.value)} style={s.inp}/>
+        {geoStatus&&<div style={{position:"absolute",right:12,top:12,fontSize:13}}>{geoStatus}</div>}
       </div>
       <div style={s.row}><input type="date" value={f.startDate} onChange={e=>sF({...f,startDate:e.target.value})} style={{...s.inp,flex:1}}/><input type="date" value={f.endDate} onChange={e=>sF({...f,endDate:e.target.value})} style={{...s.inp,flex:1}}/></div>
       <select value={f.currency} onChange={e=>sF({...f,currency:e.target.value})} style={s.inp}>{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select>
@@ -400,8 +522,13 @@ export default function TravelPlanner() {
             <div style={{display:"flex",flexDirection:"column",gap:12}}>{trips.map((t,i)=>{
               const d=t.startDate&&t.endDate?Math.ceil((new Date(t.endDate)-new Date(t.startDate))/864e5)+1:0;
               const sp=t.expenses.reduce((s,e)=>s+e.amount,0);
+              const daysUntil=t.startDate?Math.ceil((new Date(t.startDate+"T00:00:00")-new Date())/864e5):-999;
               return <div key={t.id} onClick={()=>{setActive(t.id);setTab("Przegląd")}} style={{...s.card,animationDelay:`${i*.1}s`}}>
-                <div style={{fontSize:36,marginBottom:8}}>{t.coverEmoji}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div style={{fontSize:36,marginBottom:8}}>{t.coverEmoji}</div>
+                  {daysUntil>0&&<span style={{background:"#f0f7ff",color:"#1e3a5f",padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>za {daysUntil} dni</span>}
+                  {daysUntil<=0&&daysUntil>-d&&<span style={{background:"#dcfce7",color:"#16a34a",padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>🎉 W toku</span>}
+                </div>
                 <h3 style={{fontSize:18,fontWeight:700,fontFamily:"'Playfair Display',serif",margin:"4px 0"}}>{t.name||"Bez nazwy"}</h3>
                 <p style={{color:"#64748b",fontSize:14,marginBottom:8}}>{t.destination||"Cel nieznany"}</p>
                 <div style={{display:"flex",gap:14,color:"#94a3b8",fontSize:13,flexWrap:"wrap"}}>{d>0&&<span>📅 {d} dni</span>}<span>📍 {t.places.length}</span>{sp>0&&<span>💰 {sp.toFixed(0)} {t.currency}</span>}</div>
@@ -417,23 +544,46 @@ export default function TravelPlanner() {
   const days=trip.startDate&&trip.endDate?Math.ceil((new Date(trip.endDate)-new Date(trip.startDate))/864e5)+1:0;
   const spent=trip.expenses.reduce((s,e)=>s+e.amount,0);
   const byCat=CATEGORIES.map(c=>({c,t:trip.expenses.filter(e=>e.category===c).reduce((s,e)=>s+e.amount,0)})).filter(x=>x.t>0);
+  const packing=trip.packing||[];
+  const packedCount=packing.filter(p=>p.packed).length;
 
   const TabContent=()=>{switch(tab){
     case "Przegląd": return <div style={s.tc}>
-      <div style={s.oG}>{[["📍",trip.places.length,"Miejsc"],["📅",days||"—","Dni"],["💰",spent.toFixed(0),trip.currency],["📝",trip.notes.length,"Notatek"]].map(([i,v,l],k)=>
-        <div key={k} style={s.stat}><div style={{fontSize:28}}>{i}</div><div style={s.stV}>{v}</div><div style={s.stL}>{l}</div></div>)}</div>
-      <WeatherWidget lat={trip.destLat} lng={trip.destLng} destination={trip.destination}/>
+      <Countdown startDate={trip.startDate}/>
+      <div style={s.oG}>{[
+        ["📍",trip.places.length,"Miejsc"],["📅",days||"—","Dni"],
+        ["💰",spent.toFixed(0),trip.currency],["📝",trip.notes.length,"Notatek"],
+        ["✅",trip.places.filter(p=>p.visited).length+"/"+trip.places.length,"Odwiedzone"],
+        ["🎒",packedCount+"/"+packing.length,"Spakowane"]
+      ].map(([i,v,l],k)=>
+        <div key={k} style={s.stat}><div style={{fontSize:24}}>{i}</div><div style={s.stV}>{v}</div><div style={s.stL}>{l}</div></div>)}</div>
+
+      <WeatherWidget lat={trip.destLat} lng={trip.destLng} destination={trip.destination} onGeocode={(lat,lng)=>upTrip({destLat:lat,destLng:lng})}/>
+
       {trip.places.some(p=>p.lat)&&<div style={{...s.oS,padding:0,overflow:"hidden",cursor:"pointer",marginBottom:12}} onClick={()=>setTab("Mapa")}>
         <div style={{height:180,position:"relative"}}><MiniMap trip={trip}/><div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,.6))",padding:"20px 16px 12px",color:"#fff",fontSize:13,fontWeight:600}}>🗺️ {trip.places.filter(p=>p.lat).length} miejsc na mapie</div></div>
       </div>}
-      {trip.places.length>0&&<div style={s.oS}><h3 style={s.oST}>🎯 Do odwiedzenia</h3>{trip.places.filter(p=>!p.visited).slice(0,3).map(p=><div key={p.id} style={{padding:"8px 0",borderBottom:"1px solid #f1f5f9",fontSize:14,color:"#475569"}}>{p.name}</div>)}</div>}
-      {byCat.length>0&&<div style={s.oS}><h3 style={s.oST}>📊 Wydatki</h3>{byCat.map(({c,t})=><div key={c} style={s.bR}><span style={s.bL}>{CAT_ICONS[c]} {c}</span><div style={s.bT}><div style={{...s.bF,width:`${(t/spent)*100}%`,background:CAT_COLORS[c]}}/></div><span style={s.bV}>{t.toFixed(0)}</span></div>)}</div>}
-      <div style={{display:"flex",gap:12,marginTop:20}}>
+
+      {/* Statistics */}
+      {(spent>0||trip.places.length>0)&&<div style={s.oS}>
+        <h3 style={s.oST}>📊 Statystyki podróży</h3>
+        {spent>0&&days>0&&<div style={{fontSize:13,color:"#475569",marginBottom:6}}>💰 Średnio <strong>{(spent/days).toFixed(0)} {trip.currency}/dzień</strong></div>}
+        {spent>0&&trip.places.filter(p=>p.visited).length>0&&<div style={{fontSize:13,color:"#475569",marginBottom:6}}>📍 Średnio <strong>{(spent/trip.places.filter(p=>p.visited).length).toFixed(0)} {trip.currency}/miejsce</strong></div>}
+        {byCat.length>0&&<div style={{fontSize:13,color:"#475569",marginBottom:6}}>🏆 Największy wydatek: <strong>{byCat.sort((a,b)=>b.t-a.t)[0].c}</strong> ({(byCat[0].t/spent*100).toFixed(0)}%)</div>}
+        {trip.itinerary.length>0&&<div style={{fontSize:13,color:"#475569"}}>🗓️ Zaplanowano <strong>{trip.itinerary.length}</strong> dni z <strong>{trip.itinerary.reduce((s,d)=>s+d.items.filter(i=>i.activity).length,0)}</strong> aktywnościami</div>}
+      </div>}
+
+      {byCat.length>0&&<div style={s.oS}><h3 style={s.oST}>💰 Wydatki</h3>{byCat.map(({c,t})=><div key={c} style={s.bR}><span style={s.bL}>{CAT_ICONS[c]} {c}</span><div style={s.bT}><div style={{...s.bF,width:`${(t/spent)*100}%`,background:CAT_COLORS[c]}}/></div><span style={s.bV}>{t.toFixed(0)}</span></div>)}</div>}
+
+      <div style={{display:"flex",gap:8,marginTop:20,flexWrap:"wrap"}}>
         <button onClick={()=>{setEdit(trip);setForm("trip")}} style={s.bO}>✏️ Edytuj</button>
+        <button onClick={()=>exportPDF(trip)} style={s.bO}>📄 Eksport PDF</button>
         <button onClick={()=>{if(confirm("Usunąć?")){setTrips(p=>p.filter(t=>t.id!==active));setActive(null)}}} style={{...s.bO,borderColor:"#ef4444",color:"#ef4444"}}>🗑️ Usuń</button>
       </div>
     </div>;
+
     case "Mapa": return <TripMap trip={trip} onAddPlace={p=>upTrip({places:[...trip.places,p]})}/>;
+
     case "Miejsca": return <div style={s.tc}>
       <button onClick={()=>{setForm("place");setEdit(null)}} style={s.b1}>+ Dodaj miejsce</button>
       {!trip.places.length?<div style={s.eT}><div style={{fontSize:48}}>📍</div><p>Dodaj miejsca lub użyj Mapy</p></div>:
@@ -451,6 +601,7 @@ export default function TravelPlanner() {
           <div style={s.acts}><button onClick={()=>{setEdit(p);setForm("place")}} style={s.iB}>✏️</button><button onClick={()=>upTrip({places:trip.places.filter(x=>x.id!==p.id)})} style={s.iB}>🗑️</button></div>
         </div>)}</div>}
     </div>;
+
     case "Plan dnia": return <div style={s.tc}>
       <button onClick={()=>{setForm("itin");setEdit(null)}} style={s.b1}>+ Dodaj plan dnia</button>
       {!trip.itinerary.length?<div style={s.eT}><div style={{fontSize:48}}>🗓️</div><p>Zaplanuj dni</p></div>:
@@ -463,21 +614,65 @@ export default function TravelPlanner() {
             </div>)}</div>
         </div>)}</div>}
     </div>;
+
     case "Budżet": return <div style={s.tc}>
       <div style={{background:"#fff",borderRadius:14,padding:20,marginBottom:16,textAlign:"center",border:"1px solid rgba(0,0,0,.06)"}}>
         <div style={{fontSize:14,color:"#64748b"}}>Łączne wydatki</div>
         <div style={{fontSize:32,fontWeight:700,fontFamily:"monospace"}}>{spent.toFixed(2)} <span style={{fontSize:18,color:"#94a3b8"}}>{trip.currency}</span></div>
+        {days>0&&<div style={{fontSize:13,color:"#94a3b8",marginTop:4}}>~ {(spent/days).toFixed(0)} {trip.currency}/dzień</div>}
       </div>
+      <CurrencyConverter baseCurrency={trip.currency}/>
       <button onClick={()=>{setForm("expense");setEdit(null)}} style={s.b1}>+ Dodaj wydatek</button>
       {!trip.expenses.length?<div style={s.eT}><div style={{fontSize:48}}>💰</div><p>Śledź wydatki</p></div>:
-      <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:16}}>{[...trip.expenses].sort((a,b)=>b.date.localeCompare(a.date)).map(e=>
+      <>{byCat.length>0&&<div style={{...s.oS,marginTop:16}}>{byCat.map(({c,t})=><div key={c} style={s.bR}><span style={s.bL}>{CAT_ICONS[c]} {c}</span><div style={s.bT}><div style={{...s.bF,width:`${(t/spent)*100}%`,background:CAT_COLORS[c]}}/></div><span style={s.bV}>{t.toFixed(0)}</span></div>)}</div>}
+      <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:12}}>{[...trip.expenses].sort((a,b)=>b.date.localeCompare(a.date)).map(e=>
         <div key={e.id} style={s.exC}><div style={{display:"flex",alignItems:"center",gap:12,flex:1}}>
           <div style={{...s.cD,background:CAT_COLORS[e.category]}}>{CAT_ICONS[e.category]}</div>
           <div><div style={{fontSize:14,fontWeight:600}}>{e.name}</div><div style={{fontSize:12,color:"#94a3b8"}}>{e.category} • {e.date}</div></div></div>
           <div style={{fontWeight:700,fontSize:15,fontFamily:"monospace",whiteSpace:"nowrap"}}>{e.amount.toFixed(2)}</div>
           <div style={s.acts}><button onClick={()=>{setEdit(e);setForm("expense")}} style={s.iB}>✏️</button><button onClick={()=>upTrip({expenses:trip.expenses.filter(x=>x.id!==e.id)})} style={s.iB}>🗑️</button></div>
-        </div>)}</div>}
+        </div>)}</div></>}
     </div>;
+
+    case "Pakowanie": return <div style={s.tc}>
+      {packing.length===0?<>
+        <div style={s.eT}><div style={{fontSize:48}}>🎒</div><p>Utwórz listę pakowania</p></div>
+        <button onClick={()=>{
+          const items=[];Object.entries(PACK_TEMPLATES).forEach(([cat,things])=>{things.forEach(name=>{items.push({id:uid(),name,category:cat,packed:false})})});
+          upTrip({packing:items});
+        }} style={s.b1}>📋 Załaduj szablon pakowania</button>
+        <button onClick={()=>{upTrip({packing:[{id:uid(),name:"",category:"Inne",packed:false}]})}} style={{...s.addB,marginTop:8}}>+ Pusta lista</button>
+      </>:<>
+        <div style={{background:"#fff",borderRadius:14,padding:16,marginBottom:16,border:"1px solid rgba(0,0,0,.06)",textAlign:"center"}}>
+          <div style={{fontSize:14,color:"#64748b"}}>Spakowane</div>
+          <div style={{fontSize:28,fontWeight:700,fontFamily:"monospace"}}>{packedCount}/{packing.length}</div>
+          <div style={{height:8,background:"#f1f5f9",borderRadius:4,overflow:"hidden",marginTop:8}}>
+            <div style={{height:"100%",borderRadius:4,background:packedCount===packing.length?"#22c55e":"#3b82f6",width:`${packing.length>0?(packedCount/packing.length*100):0}%`,transition:"width .3s"}}/>
+          </div>
+        </div>
+        {Object.keys(PACK_TEMPLATES).map(cat=>{
+          const items=packing.filter(p=>p.category===cat);
+          if(!items.length)return null;
+          const catPacked=items.filter(i=>i.packed).length;
+          return <div key={cat} style={{marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+              <h4 style={{fontSize:14,fontWeight:700,color:"#1e3a5f"}}>{cat} ({catPacked}/{items.length})</h4>
+              <button onClick={()=>{const allPacked=items.every(i=>i.packed);upTrip({packing:packing.map(p=>p.category===cat?{...p,packed:!allPacked}:p)})}} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"#3b82f6",fontWeight:600}}>{items.every(i=>i.packed)?"Odznacz":"Zaznacz"} wszystko</button>
+            </div>
+            {items.map(item=><div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"#fff",borderRadius:10,marginBottom:4,border:"1px solid rgba(0,0,0,.06)"}}>
+              <button onClick={()=>upTrip({packing:packing.map(p=>p.id===item.id?{...p,packed:!p.packed}:p)})} style={{...s.chk,width:22,height:22,...(item.packed?s.chkO:{})}}>{item.packed&&"✓"}</button>
+              <span style={{flex:1,fontSize:14,textDecoration:item.packed?"line-through":"none",opacity:item.packed?.5:1,color:"#475569"}}>{item.name}</span>
+              <button onClick={()=>upTrip({packing:packing.filter(p=>p.id!==item.id)})} style={s.iB}>✕</button>
+            </div>)}
+          </div>;
+        })}
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={()=>{const name=prompt("Nazwa rzeczy:");const cat=prompt("Kategoria (Dokumenty/Ubrania/Higiena/Elektronika/Apteczka/Inne):")||"Inne";if(name)upTrip({packing:[...packing,{id:uid(),name,category:cat,packed:false}]})}} style={s.addB}>+ Dodaj rzecz</button>
+        </div>
+        <button onClick={()=>{if(confirm("Wyczyścić całą listę?"))upTrip({packing:[]})}} style={{...s.bO,marginTop:12,borderColor:"#ef4444",color:"#ef4444",width:"100%"}}>🗑️ Wyczyść listę</button>
+      </>}
+    </div>;
+
     case "Notatki": return <div style={s.tc}>
       <button onClick={()=>{setForm("note");setEdit(null)}} style={s.b1}>+ Dodaj notatkę</button>
       {!trip.notes.length?<div style={s.eT}><div style={{fontSize:48}}>📝</div><p>Zapisuj myśli i zdjęcia</p></div>:
@@ -494,7 +689,7 @@ export default function TravelPlanner() {
           </div>
         </div>)}</div>}
     </div>;
-    default: return null;
+    default:return null;
   }};
 
   return(
@@ -521,22 +716,24 @@ body{font-family:'DM Sans',sans-serif}
 @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
 @keyframes cardIn{from{opacity:0;transform:scale(.95) translateY(12px)}to{opacity:1;transform:scale(1) translateY(0)}}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
-.leaflet-container{font-family:'DM Sans',sans-serif!important}`;
+.leaflet-container{font-family:'DM Sans',sans-serif!important;z-index:1!important}
+.leaflet-pane{z-index:1!important}
+.leaflet-top,.leaflet-bottom{z-index:2!important}`;
 
-const ms={sw:{position:"absolute",top:12,left:12,right:12,zIndex:1000},sr:{display:"flex",gap:6},
+const ms={sw:{position:"absolute",top:12,left:12,right:12,zIndex:5},sr:{display:"flex",gap:6},
 si:{flex:1,padding:"12px 14px",border:"none",borderRadius:12,fontSize:14,fontFamily:"'DM Sans',sans-serif",boxShadow:"0 2px 16px rgba(0,0,0,.15)",outline:"none",background:"#fff"},
 sb:{padding:"12px 20px",background:"linear-gradient(135deg,#1e3a5f,#2d5a8a)",color:"#fff",border:"none",borderRadius:12,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontWeight:700,fontSize:13,boxShadow:"0 2px 12px rgba(0,0,0,.15)"},
 dd:{background:"#fff",borderRadius:12,marginTop:6,boxShadow:"0 4px 24px rgba(0,0,0,.15)",overflow:"hidden",maxHeight:260,overflowY:"auto"},
 di:{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:10},
 da:{background:"#10b981",color:"#fff",border:"none",padding:"5px 14px",borderRadius:8,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:12,fontWeight:600,whiteSpace:"nowrap",flexShrink:0},
 mc:{height:"calc(100vh - 180px)",minHeight:420,width:"100%",background:"#e2e8f0"},
-cb:{position:"absolute",bottom:80,left:12,right:12,background:"#fff",borderRadius:16,padding:16,boxShadow:"0 4px 28px rgba(0,0,0,.18)",zIndex:1000,maxWidth:360},
+cb:{position:"absolute",bottom:80,left:12,right:12,background:"#fff",borderRadius:16,padding:16,boxShadow:"0 4px 28px rgba(0,0,0,.18)",zIndex:6,maxWidth:360},
 ci:{width:"100%",padding:"10px 12px",border:"1.5px solid #e2e8f0",borderRadius:10,fontSize:14,fontFamily:"'DM Sans',sans-serif",marginBottom:8,outline:"none"},
 ca:{width:"100%",padding:"11px",background:"linear-gradient(135deg,#1e3a5f,#2d5a8a)",color:"#fff",border:"none",borderRadius:10,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontWeight:700,fontSize:13},
-lg:{position:"absolute",bottom:16,left:12,background:"rgba(255,255,255,.95)",borderRadius:10,padding:"8px 14px",display:"flex",gap:14,boxShadow:"0 2px 10px rgba(0,0,0,.1)",zIndex:1000,fontSize:11,fontWeight:600},
+lg:{position:"absolute",bottom:16,left:12,background:"rgba(255,255,255,.95)",borderRadius:10,padding:"8px 14px",display:"flex",gap:14,boxShadow:"0 2px 10px rgba(0,0,0,.1)",zIndex:6,fontSize:11,fontWeight:600},
 li:{display:"flex",alignItems:"center",gap:4,color:"#475569"},ld:{width:10,height:10,borderRadius:"50%",border:"2px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,.2)"},
-ct:{position:"absolute",bottom:16,right:12,background:"rgba(255,255,255,.95)",borderRadius:10,padding:"8px 14px",boxShadow:"0 2px 10px rgba(0,0,0,.1)",zIndex:1000,fontSize:12,fontWeight:700,color:"#1e3a5f"},
-ht:{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",background:"rgba(255,255,255,.92)",borderRadius:14,padding:"16px 24px",boxShadow:"0 2px 16px rgba(0,0,0,.1)",zIndex:999,fontSize:14,color:"#64748b",fontWeight:500,textAlign:"center",pointerEvents:"none"}};
+ct:{position:"absolute",bottom:16,right:12,background:"rgba(255,255,255,.95)",borderRadius:10,padding:"8px 14px",boxShadow:"0 2px 10px rgba(0,0,0,.1)",zIndex:6,fontSize:12,fontWeight:700,color:"#1e3a5f"},
+ht:{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",background:"rgba(255,255,255,.92)",borderRadius:14,padding:"16px 24px",boxShadow:"0 2px 16px rgba(0,0,0,.1)",zIndex:3,fontSize:14,color:"#64748b",fontWeight:500,textAlign:"center",pointerEvents:"none"}};
 
 const s={
 app:{fontFamily:"'DM Sans',sans-serif",background:"linear-gradient(135deg,#f8fafc,#f1f5f9,#e8eef5)",minHeight:"100vh",color:"#1e293b",position:"relative"},
@@ -552,12 +749,12 @@ back:{background:"none",border:"none",color:"rgba(255,255,255,.7)",cursor:"point
 dT:{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:700,color:"#fff",margin:0},dD:{color:"rgba(255,255,255,.6)",fontSize:13,margin:0},
 aiTB:{position:"absolute",top:16,right:16,background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.2)",color:"#fff",padding:"6px 14px",borderRadius:20,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:600},
 tBar:{display:"flex",background:"#fff",borderBottom:"1px solid #e2e8f0",overflowX:"auto",padding:"0 4px",position:"sticky",top:0,zIndex:10},
-tBtn:{flex:1,minWidth:"fit-content",background:"none",border:"none",padding:"14px 6px",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:11,fontWeight:500,color:"#94a3b8",borderBottom:"2px solid transparent",display:"flex",alignItems:"center",justifyContent:"center",gap:4,whiteSpace:"nowrap",transition:"all .2s"},
+tBtn:{flex:"0 0 auto",minWidth:60,background:"none",border:"none",padding:"14px 8px",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:11,fontWeight:500,color:"#94a3b8",borderBottom:"2px solid transparent",display:"flex",alignItems:"center",justifyContent:"center",gap:3,whiteSpace:"nowrap",transition:"all .2s"},
 tA:{color:"#1e3a5f",borderBottomColor:"#1e3a5f",fontWeight:700},
 tc:{padding:"20px 16px",maxWidth:600,margin:"0 auto",animation:"fadeUp .3s ease"},
-oG:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16},
-stat:{background:"#fff",borderRadius:14,padding:"20px 16px",textAlign:"center",border:"1px solid rgba(0,0,0,.06)"},
-stV:{fontSize:26,fontWeight:700,fontFamily:"'DM Mono',monospace"},stL:{fontSize:12,color:"#94a3b8",fontWeight:500,marginTop:2},
+oG:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16},
+stat:{background:"#fff",borderRadius:14,padding:"16px 10px",textAlign:"center",border:"1px solid rgba(0,0,0,.06)"},
+stV:{fontSize:20,fontWeight:700,fontFamily:"'DM Mono',monospace"},stL:{fontSize:11,color:"#94a3b8",fontWeight:500,marginTop:2},
 oS:{background:"#fff",borderRadius:14,padding:16,marginBottom:12,border:"1px solid rgba(0,0,0,.06)"},oST:{fontSize:15,fontWeight:700,marginBottom:12},
 bR:{display:"flex",alignItems:"center",gap:10,marginBottom:10},bL:{fontSize:13,width:110,whiteSpace:"nowrap",color:"#475569"},
 bT:{flex:1,height:8,background:"#f1f5f9",borderRadius:4,overflow:"hidden"},bF:{height:"100%",borderRadius:4,transition:"width .5s ease"},
