@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-const TABS = ["Przegląd","Mapa","Miejsca","Plan dnia","Budżet","Pakowanie","Notatki"];
-const ICONS = {"Przegląd":"📋","Mapa":"🗺️","Miejsca":"📍","Plan dnia":"🗓️","Budżet":"💰","Pakowanie":"🎒","Notatki":"📝"};
+const TABS = ["Przegląd","Mapa","Miejsca","Plan dnia","Budżet","Pakowanie","Odkrywaj","Notatki"];
+const ICONS = {"Przegląd":"📋","Mapa":"🗺️","Miejsca":"📍","Plan dnia":"🗓️","Budżet":"💰","Pakowanie":"🎒","Odkrywaj":"🌍","Notatki":"📝"};
 const CURRENCIES = ["PLN","EUR","USD","GBP","CZK","CHF","SEK","NOK","DKK","HUF","TRY","JPY","THB"];
 const CATEGORIES = ["Transport","Nocleg","Jedzenie","Atrakcje","Zakupy","Inne"];
 const CAT_ICONS = {Transport:"✈️",Nocleg:"🏨",Jedzenie:"🍽️",Atrakcje:"🎭",Zakupy:"🛍️",Inne:"📦"};
@@ -24,6 +24,19 @@ const defaultTrip = () => ({id:uid(),name:"",destination:"",startDate:"",endDate
 
 function saveTrips(trips) { try{localStorage.setItem("voyager-data",JSON.stringify(trips))}catch(e){} }
 function loadTrips() { try{const d=localStorage.getItem("voyager-data");return d?JSON.parse(d):[]}catch(e){return[]} }
+function getApiKey() { return localStorage.getItem("voyager-gemini-key")||"" }
+function setApiKey(k) { localStorage.setItem("voyager-gemini-key",k) }
+
+async function callGemini(prompt, apiKey) {
+  if(!apiKey) throw new Error("Brak klucza API");
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:1024,temperature:0.8}})
+  });
+  const d = await r.json();
+  if(d.error) throw new Error(d.error.message||"Błąd API");
+  return d.candidates?.[0]?.content?.parts?.[0]?.text || "Brak odpowiedzi";
+}
 
 const compressImage = (file, maxDim=800, quality=0.6) => new Promise((resolve) => {
   const reader = new FileReader();
@@ -48,10 +61,7 @@ function Countdown({startDate}) {
   if(!startDate) return null;
   const start=new Date(startDate+"T00:00:00");
   const diff=start-now;
-  if(diff<=0) {
-    const end = new Date(startDate);
-    return <div style={cdS.box}><div style={cdS.live}>🎉 Podróż w toku!</div></div>;
-  }
+  if(diff<=0) return <div style={cdS.box}><div style={cdS.live}>🎉 Podróż w toku!</div></div>;
   const days=Math.floor(diff/864e5);
   const hours=Math.floor((diff%864e5)/36e5);
   return (
@@ -105,13 +115,13 @@ function WeatherWidget({lat,lng,destination,onGeocode}) {
   if(!lat||!lng) return (
     <div style={wS.box}><div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda</span></div>
       <div style={{padding:16,textAlign:"center"}}>
-        <p style={{color:"#94a3b8",fontSize:13,marginBottom:12}}>Brak współrzędnych GPS dla celu podróży</p>
-        {destination&&<button onClick={doGeocode} disabled={geoLoading} style={{...s.b1,padding:"10px 20px",fontSize:13}}>{geoLoading?"⏳ Szukam...":"📍 Znajdź lokalizację: "+destination}</button>}
+        <p style={{color:"#94a3b8",fontSize:13,marginBottom:12}}>Brak współrzędnych GPS</p>
+        {destination&&<button onClick={doGeocode} disabled={geoLoading} style={{...s.b1,padding:"10px 20px",fontSize:13}}>{geoLoading?"⏳ Szukam...":"📍 Znajdź: "+destination}</button>}
       </div>
     </div>
   );
 
-  if(loading) return <div style={wS.box}><div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda — {destination}</span></div><div style={{textAlign:"center",padding:"20px 0",color:"#94a3b8"}}>⏳ Ładowanie prognozy...</div></div>;
+  if(loading) return <div style={wS.box}><div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda — {destination}</span></div><div style={{textAlign:"center",padding:"20px 0",color:"#94a3b8"}}>⏳ Ładowanie...</div></div>;
   if(error) return <div style={wS.box}><div style={wS.hdr}><span style={{fontSize:20}}>🌤️</span><span style={{fontWeight:700}}>Pogoda</span></div><p style={{color:"#ef4444",fontSize:13,textAlign:"center",padding:"16px 0"}}>⚠️ {error}</p></div>;
   if(!weather) return null;
 
@@ -184,10 +194,27 @@ function CurrencyConverter({baseCurrency}) {
   );
 }
 
-/* ═══════════ PHOTO UPLOAD ═══════════ */
+/* ═══════════ PHOTO UPLOAD + GALLERY ═══════════ */
+function PhotoGallery({photos,onClose}) {
+  const [idx,setIdx]=useState(0);
+  if(!photos||!photos.length)return null;
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.95)",zIndex:300,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
+      <button onClick={onClose} style={{position:"absolute",top:16,right:16,background:"none",border:"none",color:"#fff",fontSize:28,cursor:"pointer",zIndex:301}}>✕</button>
+      <img src={photos[idx].data} style={{maxWidth:"90vw",maxHeight:"80vh",objectFit:"contain",borderRadius:8}} alt="" onClick={e=>e.stopPropagation()}/>
+      <div style={{color:"#fff",marginTop:16,fontSize:14}}>{idx+1} / {photos.length}</div>
+      {photos.length>1&&<div style={{display:"flex",gap:16,marginTop:12}}>
+        <button onClick={e=>{e.stopPropagation();setIdx((idx-1+photos.length)%photos.length)}} style={{background:"rgba(255,255,255,.2)",border:"none",color:"#fff",padding:"10px 20px",borderRadius:10,cursor:"pointer",fontSize:18}}>←</button>
+        <button onClick={e=>{e.stopPropagation();setIdx((idx+1)%photos.length)}} style={{background:"rgba(255,255,255,.2)",border:"none",color:"#fff",padding:"10px 20px",borderRadius:10,cursor:"pointer",fontSize:18}}>→</button>
+      </div>}
+    </div>
+  );
+}
+
 function PhotoUpload({photos,onChange}) {
   const fileRef=useRef(null);
   const [uploading,setUploading]=useState(false);
+  const [gallery,setGallery]=useState(false);
   const handleFiles=async(e)=>{
     const files=Array.from(e.target.files);if(!files.length)return;setUploading(true);
     const np=[];for(const f of files.slice(0,5)){if(!f.type.startsWith("image/"))continue;np.push({id:uid(),data:await compressImage(f),name:f.name})}
@@ -195,30 +222,23 @@ function PhotoUpload({photos,onChange}) {
   };
   return(<div>
     <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:8}}>
-      {(photos||[]).map(p=><div key={p.id} style={{position:"relative",width:80,height:80,borderRadius:10,overflow:"hidden",border:"2px solid #e2e8f0"}}>
+      {(photos||[]).map((p,i)=><div key={p.id} style={{position:"relative",width:80,height:80,borderRadius:10,overflow:"hidden",border:"2px solid #e2e8f0",cursor:"pointer"}} onClick={()=>setGallery(true)}>
         <img src={p.data} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>
-        <button onClick={()=>onChange(photos.filter(x=>x.id!==p.id))} style={{position:"absolute",top:2,right:2,width:20,height:20,borderRadius:"50%",background:"rgba(0,0,0,.6)",color:"#fff",border:"none",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+        <button onClick={e=>{e.stopPropagation();onChange(photos.filter(x=>x.id!==p.id))}} style={{position:"absolute",top:2,right:2,width:20,height:20,borderRadius:"50%",background:"rgba(0,0,0,.6)",color:"#fff",border:"none",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
       </div>)}
       <button onClick={()=>fileRef.current&&fileRef.current.click()} disabled={uploading} style={{width:80,height:80,borderRadius:10,border:"2px dashed #cbd5e1",background:"#f8fafc",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontSize:10,color:"#94a3b8",fontWeight:600}}>
         {uploading?"⏳":<>📷<span style={{marginTop:2}}>Dodaj</span></>}
       </button>
     </div>
     <input ref={fileRef} type="file" accept="image/*" multiple onChange={handleFiles} style={{display:"none"}}/>
+    {gallery&&<PhotoGallery photos={photos} onClose={()=>setGallery(false)}/>}
   </div>);
 }
 
 /* ═══════════ TRIP MAP (FIXED Z-INDEX) ═══════════ */
 function TripMap({trip,onAddPlace}) {
-  const containerRef=useRef(null);
-  const mapRef=useRef(null);
-  const markersRef=useRef(null);
-  const clickMkRef=useRef(null);
-  const [ready,setReady]=useState(false);
-  const [query,setQuery]=useState("");
-  const [results,setResults]=useState([]);
-  const [searching,setSearching]=useState(false);
-  const [clickPos,setClickPos]=useState(null);
-  const [newName,setNewName]=useState("");
+  const containerRef=useRef(null);const mapRef=useRef(null);const markersRef=useRef(null);const clickMkRef=useRef(null);
+  const [ready,setReady]=useState(false);const [query,setQuery]=useState("");const [results,setResults]=useState([]);const [searching,setSearching]=useState(false);const [clickPos,setClickPos]=useState(null);const [newName,setNewName]=useState("");
 
   useEffect(()=>{
     if(window.L){setReady(true);return}
@@ -243,8 +263,7 @@ function TripMap({trip,onAddPlace}) {
 
   useEffect(()=>{
     if(!mapRef.current||!window.L||!markersRef.current)return;
-    const L=window.L;
-    try{markersRef.current.clearLayers()}catch(e){return}
+    const L=window.L;try{markersRef.current.clearLayers()}catch(e){return}
     const geo=trip.places.filter(p=>p.lat&&p.lng);
     geo.forEach(p=>{
       const c=p.visited?"#94a3b8":(PRI_COLORS[p.priority]||"#1e3a5f");
@@ -327,73 +346,261 @@ function exportPDF(trip) {
   const days=trip.startDate&&trip.endDate?Math.ceil((new Date(trip.endDate)-new Date(trip.startDate))/864e5)+1:0;
   const spent=trip.expenses.reduce((s,e)=>s+e.amount,0);
   const byCat=CATEGORIES.map(c=>({c,t:trip.expenses.filter(e=>e.category===c).reduce((s,e)=>s+e.amount,0)})).filter(x=>x.t>0);
-
   const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${trip.name} — Voyager</title>
-<style>
-body{font-family:Arial,sans-serif;max-width:700px;margin:0 auto;padding:24px;color:#1e293b;font-size:13px}
-h1{font-size:24px;margin-bottom:4px}h2{font-size:16px;margin-top:24px;border-bottom:2px solid #1e3a5f;padding-bottom:4px;color:#1e3a5f}
-h3{font-size:14px;margin-top:16px}
-.subtitle{color:#64748b;font-size:14px;margin-bottom:20px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
-.stat{background:#f1f5f9;padding:12px;border-radius:8px;text-align:center}
-.stat-val{font-size:22px;font-weight:700}.stat-lbl{font-size:11px;color:#64748b}
-table{width:100%;border-collapse:collapse;margin:8px 0}
-th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:12px}
-th{background:#f1f5f9;font-weight:600}
-.check{margin-right:6px}
-.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
-@media print{body{padding:12px}h1{font-size:20px}}
-</style></head><body>
+<style>body{font-family:Arial,sans-serif;max-width:700px;margin:0 auto;padding:24px;color:#1e293b;font-size:13px}h1{font-size:24px;margin-bottom:4px}h2{font-size:16px;margin-top:24px;border-bottom:2px solid #1e3a5f;padding-bottom:4px;color:#1e3a5f}h3{font-size:14px;margin-top:16px}.subtitle{color:#64748b;font-size:14px;margin-bottom:20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}.stat{background:#f1f5f9;padding:12px;border-radius:8px;text-align:center}.stat-val{font-size:22px;font-weight:700}.stat-lbl{font-size:11px;color:#64748b}table{width:100%;border-collapse:collapse;margin:8px 0}th,td{border:1px solid #e2e8f0;padding:8px;text-align:left;font-size:12px}th{background:#f1f5f9;font-weight:600}@media print{body{padding:12px}}</style></head><body>
 <h1>${trip.coverEmoji} ${trip.name}</h1>
-<div class="subtitle">${trip.destination||""}${trip.startDate?` • ${trip.startDate} → ${trip.endDate}`:""}</div>
-<div class="grid">
-<div class="stat"><div class="stat-val">📍 ${trip.places.length}</div><div class="stat-lbl">Miejsc</div></div>
-<div class="stat"><div class="stat-val">📅 ${days||"—"}</div><div class="stat-lbl">Dni</div></div>
-<div class="stat"><div class="stat-val">💰 ${spent.toFixed(0)}</div><div class="stat-lbl">${trip.currency}</div></div>
-<div class="stat"><div class="stat-val">📝 ${trip.notes.length}</div><div class="stat-lbl">Notatek</div></div>
-</div>
-${trip.places.length?`<h2>📍 Miejsca</h2><table><tr><th>Nazwa</th><th>Priorytet</th><th>Status</th></tr>
-${trip.places.map(p=>`<tr><td>${p.name}${p.description?` — ${p.description}`:""}</td><td>${p.priority==="high"?"⬆️ Wysoki":p.priority==="medium"?"➡️ Średni":"⬇️ Niski"}</td><td>${p.visited?"✅ Odwiedzone":"⬜"}</td></tr>`).join("")}</table>`:""}
+<div class="subtitle">${trip.destination||""} ${trip.startDate?`• ${trip.startDate} → ${trip.endDate}`:""}</div>
+<div class="grid"><div class="stat"><div class="stat-val">📍 ${trip.places.length}</div><div class="stat-lbl">Miejsc</div></div><div class="stat"><div class="stat-val">📅 ${days||"—"}</div><div class="stat-lbl">Dni</div></div><div class="stat"><div class="stat-val">💰 ${spent.toFixed(0)}</div><div class="stat-lbl">${trip.currency}</div></div><div class="stat"><div class="stat-val">📝 ${trip.notes.length}</div><div class="stat-lbl">Notatek</div></div></div>
+${trip.places.length?`<h2>📍 Miejsca</h2><table><tr><th>Nazwa</th><th>Priorytet</th><th>Status</th></tr>${trip.places.map(p=>`<tr><td>${p.name}${p.description?` — ${p.description}`:""}</td><td>${p.priority}</td><td>${p.visited?"✅":"⬜"}</td></tr>`).join("")}</table>`:""}
 ${trip.itinerary.length?`<h2>🗓️ Plan dnia</h2>${trip.itinerary.map(d=>`<h3>${d.day}${d.title?" — "+d.title:""}</h3><table><tr><th>Czas</th><th>Aktywność</th></tr>${d.items.filter(i=>i.activity).map(i=>`<tr><td>${i.time}</td><td>${i.activity}</td></tr>`).join("")}</table>`).join("")}`:""}
-${byCat.length?`<h2>💰 Budżet (${spent.toFixed(2)} ${trip.currency})</h2><table><tr><th>Kategoria</th><th>Kwota</th><th>%</th></tr>
-${byCat.map(({c,t})=>`<tr><td>${CAT_ICONS[c]} ${c}</td><td>${t.toFixed(2)} ${trip.currency}</td><td>${(t/spent*100).toFixed(0)}%</td></tr>`).join("")}</table>
-${trip.expenses.length?`<h3>Szczegóły wydatków</h3><table><tr><th>Data</th><th>Opis</th><th>Kategoria</th><th>Kwota</th></tr>
-${[...trip.expenses].sort((a,b)=>a.date.localeCompare(b.date)).map(e=>`<tr><td>${e.date}</td><td>${e.name}</td><td>${e.category}</td><td>${e.amount.toFixed(2)}</td></tr>`).join("")}</table>`:""}`:""}
-${trip.packing&&trip.packing.length?`<h2>🎒 Lista pakowania</h2><table><tr><th>Rzecz</th><th>Kategoria</th><th>Status</th></tr>
-${trip.packing.map(p=>`<tr><td>${p.name}</td><td>${p.category}</td><td>${p.packed?"✅":"⬜"}</td></tr>`).join("")}</table>`:""}
+${byCat.length?`<h2>💰 Budżet (${spent.toFixed(2)} ${trip.currency})</h2><table><tr><th>Kategoria</th><th>Kwota</th></tr>${byCat.map(({c,t})=>`<tr><td>${CAT_ICONS[c]} ${c}</td><td>${t.toFixed(2)} ${trip.currency}</td></tr>`).join("")}</table>`:""}
+${trip.packing&&trip.packing.length?`<h2>🎒 Lista pakowania</h2><table><tr><th>Rzecz</th><th>Kategoria</th><th>Status</th></tr>${trip.packing.map(p=>`<tr><td>${p.name}</td><td>${p.category}</td><td>${p.packed?"✅":"⬜"}</td></tr>`).join("")}</table>`:""}
 ${trip.notes.length?`<h2>📝 Notatki</h2>${trip.notes.map(n=>`<div style="margin:12px 0;padding:12px;background:#f8fafc;border-radius:8px"><strong>${n.title}</strong><p style="margin:4px 0;color:#475569">${n.content}</p><div style="font-size:11px;color:#94a3b8">${n.date}</div></div>`).join("")}`:""}
-<div style="margin-top:32px;text-align:center;color:#94a3b8;font-size:11px">🧭 Wygenerowano przez Voyager</div>
-</body></html>`;
-
-  const w=window.open("","_blank");
-  w.document.write(html);
-  w.document.close();
-  setTimeout(()=>w.print(),500);
+<div style="margin-top:32px;text-align:center;color:#94a3b8;font-size:11px">🧭 Voyager</div></body></html>`;
+  const w=window.open("","_blank");w.document.write(html);w.document.close();setTimeout(()=>w.print(),500);
 }
 
-/* ═══════════ AI CHAT ═══════════ */
-function AIChat({trip,onClose}) {
-  const [msgs,setMsgs]=useState([{role:"assistant",text:`Cześć! 🌍 Asystent podróży${trip?.destination?` do ${trip.destination}`:""}. Zapytaj o cokolwiek!`}]);
+/* ═══════════ AI CHAT (GEMINI) ═══════════ */
+function AIChat({trip,onClose,onAddPlace}) {
+  const [msgs,setMsgs]=useState([{role:"assistant",text:`Cześć! 🌍 Jestem Twoim asystentem podróży${trip?.destination?` do **${trip.destination}**`:""}.\n\nMogę pomóc z:\n• 📍 Ciekawe miejsca do odwiedzenia\n• 🍽️ Lokalna kuchnia i restauracje\n• 🎭 Atrakcje i aktywności\n• 💡 Porady praktyczne\n• 🏛️ Historia i ciekawostki\n\nZapytaj o cokolwiek!`}]);
   const [input,setInput]=useState("");const [loading,setLoading]=useState(false);const endRef=useRef(null);
+  const [apiKey,setApiKeyState]=useState(getApiKey());const [showSettings,setShowSettings]=useState(!apiKey);
+
   useEffect(()=>{if(endRef.current)endRef.current.scrollIntoView({behavior:"smooth"})},[msgs]);
+
   const send=async()=>{
-    if(!input.trim()||loading)return;const txt=input.trim();setInput("");
+    if(!input.trim()||loading)return;
+    if(!apiKey){setShowSettings(true);return}
+    const txt=input.trim();setInput("");
     setMsgs(m=>[...m,{role:"user",text:txt}]);setLoading(true);
     try{
-      const ctx=trip?`Podróż do ${trip.destination||"?"} (${trip.startDate||"?"}–${trip.endDate||"?"}). Waluta: ${trip.currency}. Miejsca: ${trip.places.map(p=>p.name).join(", ")||"brak"}.`:"";
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:`Jesteś ekspertem od podróży. Odpowiadaj po polsku, konkretnie, z emoji. ${ctx}`,
-          messages:[...msgs.filter(m=>m.role==="user").map(m=>({role:"user",content:m.text})),{role:"user",content:txt}]})});
-      const data=await res.json();
-      setMsgs(m=>[...m,{role:"assistant",text:data.content?.map(c=>c.text||"").join("")||"Przepraszam, błąd."}]);
-    }catch{setMsgs(m=>[...m,{role:"assistant",text:"⚠️ Błąd połączenia z AI."}])}setLoading(false);
+      const ctx=trip?`Jesteś ekspertem od podróży. Użytkownik planuje podróż do: ${trip.destination||"nieznany cel"} (daty: ${trip.startDate||"?"} – ${trip.endDate||"?"}). Waluta: ${trip.currency}. Zaplanowane miejsca: ${trip.places.map(p=>p.name).join(", ")||"brak"}.
+Odpowiadaj po polsku, konkretnie i pomocnie. Używaj emoji. Jeśli pytają o miejsca do odwiedzenia, podaj konkretne nazwy z krótkim opisem. Jeśli pytają o jedzenie, podaj lokalne specjały i restauracje.`:"Jesteś pomocnym asystentem podróży. Odpowiadaj po polsku z emoji.";
+      const history=msgs.filter(m=>m.role==="user").slice(-4).map(m=>m.text).join("\n");
+      const prompt=`${ctx}\n\nHistoria rozmowy:\n${history}\n\nUżytkownik: ${txt}\n\nOdpowiedz:`;
+      const response = await callGemini(prompt, apiKey);
+      setMsgs(m=>[...m,{role:"assistant",text:response}]);
+    }catch(e){
+      setMsgs(m=>[...m,{role:"assistant",text:`⚠️ ${e.message||"Błąd połączenia"}\n\nSprawdź klucz API w ustawieniach (⚙️).`}]);
+    }
+    setLoading(false);
   };
+
+  const quickBtns = trip?.destination ? [
+    {label:"📍 Co zobaczyć?", q:`Jakie są najciekawsze miejsca do odwiedzenia w ${trip.destination} i okolicy? Podaj top 5 z krótkim opisem.`},
+    {label:"🍽️ Co zjeść?", q:`Jakie są lokalne specjały kuchni w ${trip.destination}? Co warto spróbować i gdzie?`},
+    {label:"💡 Porady", q:`Jakie praktyczne porady masz dla turysty odwiedzającego ${trip.destination}? Transport, bezpieczeństwo, zwyczaje.`},
+    {label:"🏛️ Ciekawostki", q:`Opowiedz mi ciekawe fakty i historię o ${trip.destination}. Co sprawia, że to miejsce jest wyjątkowe?`},
+  ] : [];
+
   return(
     <div style={s.aiO}><div style={s.aiP}>
-      <div style={s.aiH}><span style={{fontSize:20}}>🤖 Asystent AI</span><button onClick={onClose} style={s.clB}>✕</button></div>
-      <div style={s.aiM}>{msgs.map((m,i)=><div key={i} style={{...s.bbl,...(m.role==="user"?s.uB:s.aB)}}><div style={{whiteSpace:"pre-wrap",lineHeight:1.5}}>{m.text}</div></div>)}
-        {loading&&<div style={{...s.bbl,...s.aB,color:"#94a3b8"}}>● ● ●</div>}<div ref={endRef}/></div>
-      <div style={s.aiR}><input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Zapytaj..." style={s.aiI}/><button onClick={send} disabled={loading} style={s.snB}>➤</button></div>
+      <div style={s.aiH}>
+        <span style={{fontSize:18,fontWeight:700}}>🤖 Asystent AI</span>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={()=>setShowSettings(!showSettings)} style={{background:"none",border:"none",fontSize:18,cursor:"pointer"}}>⚙️</button>
+          <button onClick={onClose} style={s.clB}>✕</button>
+        </div>
+      </div>
+      {showSettings&&<div style={{padding:"12px 20px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>🔑 Klucz API Gemini</div>
+        <div style={{display:"flex",gap:6}}>
+          <input value={apiKey} onChange={e=>{setApiKeyState(e.target.value);setApiKey(e.target.value)}} placeholder="Wklej klucz z aistudio.google.com/apikey" type="password" style={{...s.inp,marginBottom:0,flex:1,fontSize:12}}/>
+          <button onClick={()=>setShowSettings(false)} style={{background:"#10b981",color:"#fff",border:"none",padding:"8px 14px",borderRadius:10,cursor:"pointer",fontSize:12,fontWeight:600}}>✓</button>
+        </div>
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style={{fontSize:11,color:"#3b82f6",marginTop:6,display:"inline-block"}}>🔗 Zdobądź darmowy klucz →</a>
+      </div>}
+      <div style={s.aiM}>
+        {msgs.map((m,i)=><div key={i} style={{...s.bbl,...(m.role==="user"?s.uB:s.aB)}}><div style={{whiteSpace:"pre-wrap",lineHeight:1.6}}>{m.text}</div></div>)}
+        {loading&&<div style={{...s.bbl,...s.aB,color:"#94a3b8"}}>✨ Myślę...</div>}
+        <div ref={endRef}/>
+      </div>
+      {quickBtns.length>0&&msgs.length<3&&<div style={{padding:"8px 16px",display:"flex",gap:6,overflowX:"auto",borderTop:"1px solid #f1f5f9"}}>
+        {quickBtns.map((b,i)=><button key={i} onClick={()=>{setInput(b.q);setTimeout(()=>send(),100)}} style={{background:"#f0f7ff",border:"1px solid #bfdbfe",color:"#1e3a5f",padding:"8px 14px",borderRadius:20,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:12,fontWeight:600,whiteSpace:"nowrap",flexShrink:0}}>{b.label}</button>)}
+      </div>}
+      <div style={s.aiR}><input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder={apiKey?"Zapytaj o co chcesz...":"Najpierw ustaw klucz API ⚙️"} style={s.aiI}/><button onClick={send} disabled={loading} style={s.snB}>➤</button></div>
+    </div></div>
+  );
+}
+
+/* ═══════════ DISCOVER TAB ═══════════ */
+function DiscoverTab({trip,apiKey}) {
+  const [info,setInfo]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+  const [wiki,setWiki]=useState(null);
+  const [wikiLoading,setWikiLoading]=useState(false);
+
+  const loadWiki = async () => {
+    if(!trip.destination||wikiLoading)return;
+    setWikiLoading(true);
+    try{
+      const r=await fetch(`https://pl.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(trip.destination)}`);
+      const d=await r.json();
+      if(d.extract)setWiki(d);
+    }catch{}
+    setWikiLoading(false);
+  };
+
+  const loadAI = async () => {
+    if(!apiKey){setError("Ustaw klucz API w czacie AI (🤖)");return}
+    if(!trip.destination){setError("Ustaw cel podróży");return}
+    setLoading(true);setError(null);
+    try{
+      const prompt=`Jesteś ekspertem od podróży. Podaj informacje o miejscu: ${trip.destination}.
+
+Odpowiedz w formacie JSON (bez markdown, bez backticks):
+{
+  "country":"nazwa kraju",
+  "language":"główny język",
+  "emergency":"numer alarmowy",
+  "timezone":"strefa czasowa",
+  "currency":"lokalna waluta",
+  "voltage":"napięcie prądu",
+  "tips":["porada 1","porada 2","porada 3","porada 4","porada 5"],
+  "mustSee":["miejsce 1 - krótki opis","miejsce 2 - krótki opis","miejsce 3 - krótki opis","miejsce 4 - krótki opis","miejsce 5 - krótki opis"],
+  "food":["danie 1 - opis","danie 2 - opis","danie 3 - opis"],
+  "phrases":[{"local":"fraza lokalna","pl":"tłumaczenie"},{"local":"fraza","pl":"tłumaczenie"},{"local":"fraza","pl":"tłumaczenie"},{"local":"fraza","pl":"tłumaczenie"}],
+  "funFacts":["ciekawostka 1","ciekawostka 2","ciekawostka 3"]
+}`;
+      const response = await callGemini(prompt, apiKey);
+      const clean = response.replace(/```json\s*/g,"").replace(/```\s*/g,"").trim();
+      const parsed = JSON.parse(clean);
+      setInfo(parsed);
+    }catch(e){setError("Błąd: "+e.message)}
+    setLoading(false);
+  };
+
+  useEffect(()=>{if(trip.destination)loadWiki()},[trip.destination]);
+
+  if(!trip.destination) return <div style={s.tc}><div style={s.eT}><div style={{fontSize:48}}>🌍</div><p>Ustaw cel podróży aby odkrywać</p></div></div>;
+
+  return(
+    <div style={s.tc}>
+      <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:700,marginBottom:16}}>🌍 Odkrywaj: {trip.destination}</h3>
+
+      {/* Wikipedia */}
+      {wiki&&<div style={{...s.oS,marginBottom:16}}>
+        <h4 style={{fontSize:15,fontWeight:700,marginBottom:8}}>📖 O miejscu</h4>
+        {wiki.thumbnail&&<img src={wiki.thumbnail.source} style={{width:"100%",maxHeight:200,objectFit:"cover",borderRadius:10,marginBottom:12}} alt=""/>}
+        <p style={{fontSize:14,color:"#475569",lineHeight:1.6}}>{wiki.extract}</p>
+        {wiki.content_urls&&<a href={wiki.content_urls.desktop.page} target="_blank" rel="noopener" style={{fontSize:12,color:"#3b82f6",marginTop:8,display:"inline-block"}}>Czytaj więcej na Wikipedii →</a>}
+      </div>}
+
+      {!info&&!loading&&<button onClick={loadAI} style={s.b1}>
+        {error?"🔄 Spróbuj ponownie":"✨ Załaduj przewodnik AI"}
+      </button>}
+      {error&&<p style={{color:"#ef4444",fontSize:13,textAlign:"center",marginTop:8}}>{error}</p>}
+      {loading&&<div style={{textAlign:"center",padding:"32px 0",color:"#94a3b8"}}><div style={{fontSize:36,marginBottom:8}}>✨</div>AI generuje przewodnik...</div>}
+
+      {info&&<>
+        {/* Country Info */}
+        <div style={{...s.oS,marginBottom:12}}>
+          <h4 style={{fontSize:15,fontWeight:700,marginBottom:12}}>🆘 Informacje o kraju</h4>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {[["🌐",info.country,"Kraj"],["🗣️",info.language,"Język"],["📞",info.emergency,"Nr alarmowy"],["🕐",info.timezone,"Strefa"],["💰",info.currency,"Waluta"],["🔌",info.voltage,"Prąd"]].map(([ico,val,lbl],i)=>
+              <div key={i} style={{background:"#f8fafc",padding:"10px 12px",borderRadius:10,display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:20}}>{ico}</span>
+                <div><div style={{fontSize:13,fontWeight:700}}>{val}</div><div style={{fontSize:11,color:"#94a3b8"}}>{lbl}</div></div>
+              </div>)}
+          </div>
+        </div>
+
+        {/* Must See */}
+        <div style={{...s.oS,marginBottom:12}}>
+          <h4 style={{fontSize:15,fontWeight:700,marginBottom:10}}>📍 Musisz zobaczyć</h4>
+          {info.mustSee.map((p,i)=><div key={i} style={{padding:"10px 0",borderBottom:i<info.mustSee.length-1?"1px solid #f1f5f9":"none",display:"flex",gap:10,alignItems:"flex-start"}}>
+            <span style={{background:"#1e3a5f",color:"#fff",width:24,height:24,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}}>{i+1}</span>
+            <span style={{fontSize:14,color:"#475569",lineHeight:1.5}}>{p}</span>
+          </div>)}
+        </div>
+
+        {/* Local Food */}
+        <div style={{...s.oS,marginBottom:12}}>
+          <h4 style={{fontSize:15,fontWeight:700,marginBottom:10}}>🍽️ Lokalna kuchnia</h4>
+          {info.food.map((f,i)=><div key={i} style={{padding:"10px 0",borderBottom:i<info.food.length-1?"1px solid #f1f5f9":"none",fontSize:14,color:"#475569",lineHeight:1.5}}>🍴 {f}</div>)}
+        </div>
+
+        {/* Useful Phrases */}
+        {info.phrases&&info.phrases.length>0&&<div style={{...s.oS,marginBottom:12}}>
+          <h4 style={{fontSize:15,fontWeight:700,marginBottom:10}}>🗣️ Przydatne zwroty</h4>
+          {info.phrases.map((p,i)=><div key={i} style={{padding:"8px 0",borderBottom:i<info.phrases.length-1?"1px solid #f1f5f9":"none",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:14,fontWeight:600,color:"#1e3a5f"}}>{p.local}</span>
+            <span style={{fontSize:13,color:"#64748b"}}>{p.pl}</span>
+          </div>)}
+        </div>}
+
+        {/* Fun Facts */}
+        <div style={{...s.oS,marginBottom:12}}>
+          <h4 style={{fontSize:15,fontWeight:700,marginBottom:10}}>🎯 Ciekawostki</h4>
+          {info.funFacts.map((f,i)=><div key={i} style={{padding:"10px 14px",background:"#fffbeb",borderRadius:10,marginBottom:8,fontSize:14,color:"#92400e",lineHeight:1.5}}>💡 {f}</div>)}
+        </div>
+
+        {/* Tips */}
+        <div style={{...s.oS,marginBottom:12}}>
+          <h4 style={{fontSize:15,fontWeight:700,marginBottom:10}}>💡 Porady podróżne</h4>
+          {info.tips.map((t,i)=><div key={i} style={{padding:"10px 14px",background:"#f0f7ff",borderRadius:10,marginBottom:8,fontSize:14,color:"#1e3a5f",lineHeight:1.5}}>✅ {t}</div>)}
+        </div>
+
+        <button onClick={loadAI} style={s.addB}>🔄 Odśwież przewodnik</button>
+      </>}
+    </div>
+  );
+}
+
+/* ═══════════ ACTIVITY SUGGESTIONS ═══════════ */
+function ActivitySuggestions({destination,date,existingItems,onSelect,apiKey}) {
+  const [suggestions,setSuggestions]=useState([]);
+  const [loading,setLoading]=useState(false);
+
+  const getSuggestions = async () => {
+    if(!apiKey||!destination){return}
+    setLoading(true);
+    try{
+      const existing=existingItems.filter(i=>i.activity).map(i=>i.activity).join(", ");
+      const prompt=`Zaproponuj 6 konkretnych aktywności/atrakcji do zrobienia w ${destination}${date?" dnia "+date:""}.
+${existing?`Już zaplanowane: ${existing}. Zaproponuj INNE.`:""}
+Odpowiedz jako JSON array stringów, np: ["09:00 — Nazwa aktywności","10:30 — Inna aktywność"]. Bez markdown, bez backticks. Po polsku. Każda aktywność z proponowaną godziną.`;
+      const response = await callGemini(prompt, apiKey);
+      const clean = response.replace(/```json\s*/g,"").replace(/```\s*/g,"").trim();
+      setSuggestions(JSON.parse(clean));
+    }catch{setSuggestions([])}
+    setLoading(false);
+  };
+
+  return(
+    <div style={{marginBottom:12}}>
+      <button onClick={getSuggestions} disabled={loading||!apiKey} style={{...s.addB,background:apiKey?"#f0f7ff":"#f8fafc",borderColor:apiKey?"#bfdbfe":"#e2e8f0",color:apiKey?"#1e3a5f":"#94a3b8"}}>
+        {loading?"✨ Generuję pomysły...":apiKey?"✨ Zaproponuj aktywności AI":"🔑 Ustaw klucz API w czacie AI"}
+      </button>
+      {suggestions.length>0&&<div style={{marginTop:8}}>
+        {suggestions.map((sg,i)=>{
+          const parts=sg.split(/[—–-]/);
+          const time=parts[0]?.trim()||"";
+          const activity=parts.slice(1).join("—").trim()||sg;
+          return <div key={i} onClick={()=>{onSelect(time.replace(/[^0-9:]/g,""),activity);setSuggestions(suggestions.filter((_,j)=>j!==i))}} style={{padding:"10px 14px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:10,marginBottom:6,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",gap:8,transition:"all .15s"}}>
+            <span style={{color:"#3b82f6",fontSize:16}}>+</span>
+            <span style={{color:"#475569"}}>{sg}</span>
+          </div>;
+        })}
+      </div>}
+    </div>
+  );
+}
+
+/* ═══════════ SETTINGS PANEL ═══════════ */
+function SettingsPanel({onClose}) {
+  const [key,setKey]=useState(getApiKey());
+  return(
+    <div style={s.modal}><div style={s.mc}>
+      <h3 style={s.fT}>⚙️ Ustawienia</h3>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:14,fontWeight:600,marginBottom:8}}>🔑 Klucz API Gemini</div>
+        <p style={{fontSize:12,color:"#64748b",marginBottom:8}}>Potrzebny do AI chatu, odkrywania i podpowiedzi aktywności. Darmowy!</p>
+        <input value={key} onChange={e=>{setKey(e.target.value);setApiKey(e.target.value)}} placeholder="AIza..." type="password" style={s.inp}/>
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style={{fontSize:13,color:"#3b82f6",fontWeight:600}}>🔗 Zdobądź klucz na aistudio.google.com →</a>
+      </div>
+      <button onClick={onClose} style={s.b1}>Zapisz</button>
     </div></div>
   );
 }
@@ -406,29 +613,20 @@ export default function TravelPlanner() {
   const [form,setForm]=useState(null);
   const [edit,setEdit]=useState(null);
   const [showAI,setShowAI]=useState(false);
+  const [showSettings,setShowSettings]=useState(false);
 
   useEffect(()=>{saveTrips(trips)},[trips]);
 
   const trip=trips.find(t=>t.id===active);
   const upTrip=useCallback((u)=>setTrips(p=>p.map(t=>t.id===active?{...t,...u}:t)),[active]);
+  const apiKey=getApiKey();
 
   // ─── FORMS ───
   const TripForm=()=>{
     const [f,sF]=useState(edit||defaultTrip());
     const em=["✈️","🏖️","🏔️","🌍","🗼","🏛️","🎡","🚗","🛳️","🌴","🏕️","🎿"];
     const [geoStatus,setGeoStatus]=useState(f.destLat?"✅":"");
-
-    const geocode=async(dest)=>{
-      if(!dest.trim())return;
-      setGeoStatus("⏳");
-      try{
-        const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}&limit=1`);
-        const d=await r.json();
-        if(d[0]){sF(prev=>({...prev,destLat:+d[0].lat,destLng:+d[0].lon}));setGeoStatus("✅")}
-        else setGeoStatus("❌");
-      }catch{setGeoStatus("❌")}
-    };
-
+    const geocode=async(dest)=>{if(!dest.trim())return;setGeoStatus("⏳");try{const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}&limit=1`);const d=await r.json();if(d[0]){sF(prev=>({...prev,destLat:+d[0].lat,destLng:+d[0].lon}));setGeoStatus("✅")}else setGeoStatus("❌")}catch{setGeoStatus("❌")}};
     return <div style={s.modal}><div style={s.mc}>
       <h3 style={s.fT}>{edit?"Edytuj":"Nowa"} podróż ✈️</h3>
       <div style={s.eR}>{em.map(e=><button key={e} onClick={()=>sF({...f,coverEmoji:e})} style={{...s.eB,...(f.coverEmoji===e?s.eBA:{})}}>{e}</button>)}</div>
@@ -492,6 +690,7 @@ export default function TravelPlanner() {
     return <div style={s.modal}><div style={s.mc}>
       <h3 style={s.fT}>🗓️ {edit?"Edytuj":"Dodaj"} plan dnia</h3>
       <input type="date" value={f.day} onChange={e=>sF({...f,day:e.target.value})} style={s.inp}/><input placeholder="Tytuł dnia" value={f.title} onChange={e=>sF({...f,title:e.target.value})} style={s.inp}/>
+      <ActivitySuggestions destination={trip?.destination} date={f.day} existingItems={f.items} apiKey={apiKey} onSelect={(time,activity)=>sF({...f,items:[...f.items,{time:time||"",activity}]})}/>
       <div style={{fontSize:13,fontWeight:600,color:"#475569",margin:"6px 0"}}>Aktywności:</div>
       {f.items.map((it,i)=><div key={i} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
         <input type="time" value={it.time} onChange={e=>upI(i,"time",e.target.value)} style={{...s.inp,width:100,flex:"none"}}/>
@@ -512,13 +711,17 @@ export default function TravelPlanner() {
           <h1 style={s.hT}>Voyager</h1><p style={s.hS}>Twój osobisty planer podróży</p>
         </div></div>
         <div style={{padding:"24px 16px"}}>
+          {!apiKey&&<div style={{background:"#fffbeb",border:"1px solid #fcd34d",borderRadius:12,padding:14,marginBottom:16,fontSize:13,color:"#92400e"}}>
+            🔑 <strong>Ustaw klucz Gemini AI</strong> aby odblokować asystenta, odkrywanie i podpowiedzi.
+            <button onClick={()=>setShowSettings(true)} style={{display:"block",marginTop:8,background:"#f59e0b",color:"#fff",border:"none",padding:"8px 16px",borderRadius:8,cursor:"pointer",fontWeight:600,fontSize:13}}>⚙️ Ustawienia</button>
+          </div>}
           {trips.length===0?<div style={s.empty}>
             <div style={{fontSize:64,marginBottom:16}}>🌎</div>
             <h2 style={{color:"#1e293b",fontFamily:"'Playfair Display',serif",fontSize:22,margin:0}}>Brak podróży</h2>
             <p style={{color:"#64748b",margin:"8px 0 24px"}}>Zaplanuj swoją pierwszą przygodę!</p>
             <button onClick={()=>{setForm("trip");setEdit(null)}} style={s.b1}>+ Zaplanuj podróż</button>
           </div>:<>
-            <div style={s.sH}><h2 style={s.sT}>Moje podróże</h2><button onClick={()=>{setForm("trip");setEdit(null)}} style={s.bSm}>+ Nowa</button></div>
+            <div style={s.sH}><h2 style={s.sT}>Moje podróże</h2><div style={{display:"flex",gap:8}}><button onClick={()=>setShowSettings(true)} style={{background:"none",border:"1px solid #e2e8f0",padding:"8px 12px",borderRadius:10,cursor:"pointer",fontSize:16}}>⚙️</button><button onClick={()=>{setForm("trip");setEdit(null)}} style={s.bSm}>+ Nowa</button></div></div>
             <div style={{display:"flex",flexDirection:"column",gap:12}}>{trips.map((t,i)=>{
               const d=t.startDate&&t.endDate?Math.ceil((new Date(t.endDate)-new Date(t.startDate))/864e5)+1:0;
               const sp=t.expenses.reduce((s,e)=>s+e.amount,0);
@@ -537,6 +740,7 @@ export default function TravelPlanner() {
         </div>
       </div>
       {form==="trip"&&<TripForm/>}
+      {showSettings&&<SettingsPanel onClose={()=>setShowSettings(false)}/>}
     </div>
   );
 
@@ -557,28 +761,23 @@ export default function TravelPlanner() {
         ["🎒",packedCount+"/"+packing.length,"Spakowane"]
       ].map(([i,v,l],k)=>
         <div key={k} style={s.stat}><div style={{fontSize:24}}>{i}</div><div style={s.stV}>{v}</div><div style={s.stL}>{l}</div></div>)}</div>
-
       <WeatherWidget lat={trip.destLat} lng={trip.destLng} destination={trip.destination} onGeocode={(lat,lng)=>upTrip({destLat:lat,destLng:lng})}/>
-
       {trip.places.some(p=>p.lat)&&<div style={{...s.oS,padding:0,overflow:"hidden",cursor:"pointer",marginBottom:12}} onClick={()=>setTab("Mapa")}>
         <div style={{height:180,position:"relative"}}><MiniMap trip={trip}/><div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,.6))",padding:"20px 16px 12px",color:"#fff",fontSize:13,fontWeight:600}}>🗺️ {trip.places.filter(p=>p.lat).length} miejsc na mapie</div></div>
       </div>}
-
-      {/* Statistics */}
       {(spent>0||trip.places.length>0)&&<div style={s.oS}>
-        <h3 style={s.oST}>📊 Statystyki podróży</h3>
+        <h3 style={s.oST}>📊 Statystyki</h3>
         {spent>0&&days>0&&<div style={{fontSize:13,color:"#475569",marginBottom:6}}>💰 Średnio <strong>{(spent/days).toFixed(0)} {trip.currency}/dzień</strong></div>}
         {spent>0&&trip.places.filter(p=>p.visited).length>0&&<div style={{fontSize:13,color:"#475569",marginBottom:6}}>📍 Średnio <strong>{(spent/trip.places.filter(p=>p.visited).length).toFixed(0)} {trip.currency}/miejsce</strong></div>}
-        {byCat.length>0&&<div style={{fontSize:13,color:"#475569",marginBottom:6}}>🏆 Największy wydatek: <strong>{byCat.sort((a,b)=>b.t-a.t)[0].c}</strong> ({(byCat[0].t/spent*100).toFixed(0)}%)</div>}
-        {trip.itinerary.length>0&&<div style={{fontSize:13,color:"#475569"}}>🗓️ Zaplanowano <strong>{trip.itinerary.length}</strong> dni z <strong>{trip.itinerary.reduce((s,d)=>s+d.items.filter(i=>i.activity).length,0)}</strong> aktywnościami</div>}
+        {byCat.length>0&&<div style={{fontSize:13,color:"#475569",marginBottom:6}}>🏆 Największy wydatek: <strong>{byCat.sort((a,b)=>b.t-a.t)[0].c}</strong></div>}
+        {trip.itinerary.length>0&&<div style={{fontSize:13,color:"#475569"}}>🗓️ <strong>{trip.itinerary.length}</strong> dni, <strong>{trip.itinerary.reduce((s,d)=>s+d.items.filter(i=>i.activity).length,0)}</strong> aktywności</div>}
       </div>}
-
       {byCat.length>0&&<div style={s.oS}><h3 style={s.oST}>💰 Wydatki</h3>{byCat.map(({c,t})=><div key={c} style={s.bR}><span style={s.bL}>{CAT_ICONS[c]} {c}</span><div style={s.bT}><div style={{...s.bF,width:`${(t/spent)*100}%`,background:CAT_COLORS[c]}}/></div><span style={s.bV}>{t.toFixed(0)}</span></div>)}</div>}
-
       <div style={{display:"flex",gap:8,marginTop:20,flexWrap:"wrap"}}>
         <button onClick={()=>{setEdit(trip);setForm("trip")}} style={s.bO}>✏️ Edytuj</button>
-        <button onClick={()=>exportPDF(trip)} style={s.bO}>📄 Eksport PDF</button>
-        <button onClick={()=>{if(confirm("Usunąć?")){setTrips(p=>p.filter(t=>t.id!==active));setActive(null)}}} style={{...s.bO,borderColor:"#ef4444",color:"#ef4444"}}>🗑️ Usuń</button>
+        <button onClick={()=>exportPDF(trip)} style={s.bO}>📄 PDF</button>
+        <button onClick={()=>setShowSettings(true)} style={s.bO}>⚙️</button>
+        <button onClick={()=>{if(confirm("Usunąć?")){setTrips(p=>p.filter(t=>t.id!==active));setActive(null)}}} style={{...s.bO,borderColor:"#ef4444",color:"#ef4444"}}>🗑️</button>
       </div>
     </div>;
 
@@ -586,7 +785,7 @@ export default function TravelPlanner() {
 
     case "Miejsca": return <div style={s.tc}>
       <button onClick={()=>{setForm("place");setEdit(null)}} style={s.b1}>+ Dodaj miejsce</button>
-      {!trip.places.length?<div style={s.eT}><div style={{fontSize:48}}>📍</div><p>Dodaj miejsca lub użyj Mapy</p></div>:
+      {!trip.places.length?<div style={s.eT}><div style={{fontSize:48}}>📍</div><p>Dodaj miejsca</p></div>:
       <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:16}}>{trip.places.map(p=>
         <div key={p.id} style={s.plC}>
           <div style={{display:"flex",gap:12,alignItems:"flex-start",flex:1}}>
@@ -637,10 +836,7 @@ export default function TravelPlanner() {
     case "Pakowanie": return <div style={s.tc}>
       {packing.length===0?<>
         <div style={s.eT}><div style={{fontSize:48}}>🎒</div><p>Utwórz listę pakowania</p></div>
-        <button onClick={()=>{
-          const items=[];Object.entries(PACK_TEMPLATES).forEach(([cat,things])=>{things.forEach(name=>{items.push({id:uid(),name,category:cat,packed:false})})});
-          upTrip({packing:items});
-        }} style={s.b1}>📋 Załaduj szablon pakowania</button>
+        <button onClick={()=>{const items=[];Object.entries(PACK_TEMPLATES).forEach(([cat,things])=>{things.forEach(name=>{items.push({id:uid(),name,category:cat,packed:false})})});upTrip({packing:items})}} style={s.b1}>📋 Załaduj szablon</button>
         <button onClick={()=>{upTrip({packing:[{id:uid(),name:"",category:"Inne",packed:false}]})}} style={{...s.addB,marginTop:8}}>+ Pusta lista</button>
       </>:<>
         <div style={{background:"#fff",borderRadius:14,padding:16,marginBottom:16,border:"1px solid rgba(0,0,0,.06)",textAlign:"center"}}>
@@ -657,7 +853,7 @@ export default function TravelPlanner() {
           return <div key={cat} style={{marginBottom:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
               <h4 style={{fontSize:14,fontWeight:700,color:"#1e3a5f"}}>{cat} ({catPacked}/{items.length})</h4>
-              <button onClick={()=>{const allPacked=items.every(i=>i.packed);upTrip({packing:packing.map(p=>p.category===cat?{...p,packed:!allPacked}:p)})}} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"#3b82f6",fontWeight:600}}>{items.every(i=>i.packed)?"Odznacz":"Zaznacz"} wszystko</button>
+              <button onClick={()=>{const allPacked=items.every(i=>i.packed);upTrip({packing:packing.map(p=>p.category===cat?{...p,packed:!allPacked}:p)})}} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"#3b82f6",fontWeight:600}}>{items.every(i=>i.packed)?"Odznacz":"Zaznacz"}</button>
             </div>
             {items.map(item=><div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"#fff",borderRadius:10,marginBottom:4,border:"1px solid rgba(0,0,0,.06)"}}>
               <button onClick={()=>upTrip({packing:packing.map(p=>p.id===item.id?{...p,packed:!p.packed}:p)})} style={{...s.chk,width:22,height:22,...(item.packed?s.chkO:{})}}>{item.packed&&"✓"}</button>
@@ -667,11 +863,13 @@ export default function TravelPlanner() {
           </div>;
         })}
         <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>{const name=prompt("Nazwa rzeczy:");const cat=prompt("Kategoria (Dokumenty/Ubrania/Higiena/Elektronika/Apteczka/Inne):")||"Inne";if(name)upTrip({packing:[...packing,{id:uid(),name,category:cat,packed:false}]})}} style={s.addB}>+ Dodaj rzecz</button>
+          <button onClick={()=>{const name=prompt("Nazwa rzeczy:");const cat=prompt("Kategoria (Dokumenty/Ubrania/Higiena/Elektronika/Apteczka/Inne):")||"Inne";if(name)upTrip({packing:[...packing,{id:uid(),name,category:cat,packed:false}]})}} style={s.addB}>+ Dodaj</button>
         </div>
-        <button onClick={()=>{if(confirm("Wyczyścić całą listę?"))upTrip({packing:[]})}} style={{...s.bO,marginTop:12,borderColor:"#ef4444",color:"#ef4444",width:"100%"}}>🗑️ Wyczyść listę</button>
+        <button onClick={()=>{if(confirm("Wyczyścić?"))upTrip({packing:[]})}} style={{...s.bO,marginTop:12,borderColor:"#ef4444",color:"#ef4444",width:"100%"}}>🗑️ Wyczyść</button>
       </>}
     </div>;
+
+    case "Odkrywaj": return <DiscoverTab trip={trip} apiKey={apiKey}/>;
 
     case "Notatki": return <div style={s.tc}>
       <button onClick={()=>{setForm("note");setEdit(null)}} style={s.b1}>+ Dodaj notatkę</button>
@@ -703,7 +901,8 @@ export default function TravelPlanner() {
       <TabContent/>
       <button onClick={()=>setShowAI(true)} style={s.fab}>🤖</button>
       {form==="trip"&&<TripForm/>}{form==="place"&&<PlaceForm/>}{form==="expense"&&<ExpenseForm/>}{form==="note"&&<NoteForm/>}{form==="itin"&&<ItinForm/>}
-      {showAI&&<AIChat trip={trip} onClose={()=>setShowAI(false)}/>}
+      {showAI&&<AIChat trip={trip} onClose={()=>setShowAI(false)} onAddPlace={p=>upTrip({places:[...trip.places,p]})}/>}
+      {showSettings&&<SettingsPanel onClose={()=>setShowSettings(false)}/>}
     </div>
   );
 }
@@ -749,7 +948,7 @@ back:{background:"none",border:"none",color:"rgba(255,255,255,.7)",cursor:"point
 dT:{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:700,color:"#fff",margin:0},dD:{color:"rgba(255,255,255,.6)",fontSize:13,margin:0},
 aiTB:{position:"absolute",top:16,right:16,background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.2)",color:"#fff",padding:"6px 14px",borderRadius:20,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:13,fontWeight:600},
 tBar:{display:"flex",background:"#fff",borderBottom:"1px solid #e2e8f0",overflowX:"auto",padding:"0 4px",position:"sticky",top:0,zIndex:10},
-tBtn:{flex:"0 0 auto",minWidth:60,background:"none",border:"none",padding:"14px 8px",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:11,fontWeight:500,color:"#94a3b8",borderBottom:"2px solid transparent",display:"flex",alignItems:"center",justifyContent:"center",gap:3,whiteSpace:"nowrap",transition:"all .2s"},
+tBtn:{flex:"0 0 auto",minWidth:52,background:"none",border:"none",padding:"14px 6px",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:10,fontWeight:500,color:"#94a3b8",borderBottom:"2px solid transparent",display:"flex",alignItems:"center",justifyContent:"center",gap:2,whiteSpace:"nowrap",transition:"all .2s"},
 tA:{color:"#1e3a5f",borderBottomColor:"#1e3a5f",fontWeight:700},
 tc:{padding:"20px 16px",maxWidth:600,margin:"0 auto",animation:"fadeUp .3s ease"},
 oG:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16},
@@ -787,7 +986,7 @@ bO:{background:"none",border:"1.5px solid #e2e8f0",color:"#475569",padding:"11px
 fab:{position:"fixed",bottom:24,right:24,width:56,height:56,borderRadius:"50%",background:"linear-gradient(135deg,#1e3a5f,#2d5a8a)",border:"none",fontSize:24,cursor:"pointer",boxShadow:"0 6px 24px rgba(30,58,95,.35)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50},
 aiO:{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",backdropFilter:"blur(8px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center"},
 aiP:{background:"#fff",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:500,height:"80vh",display:"flex",flexDirection:"column",animation:"fadeUp .3s ease"},
-aiH:{padding:"16px 20px",borderBottom:"1px solid #e2e8f0",display:"flex",justifyContent:"space-between",alignItems:"center",fontWeight:700},
+aiH:{padding:"16px 20px",borderBottom:"1px solid #e2e8f0",display:"flex",justifyContent:"space-between",alignItems:"center"},
 clB:{background:"none",border:"none",fontSize:18,cursor:"pointer",color:"#94a3b8"},
 aiM:{flex:1,overflowY:"auto",padding:16,display:"flex",flexDirection:"column",gap:12},
 bbl:{padding:"12px 16px",borderRadius:16,maxWidth:"85%",fontSize:14,lineHeight:1.5},
