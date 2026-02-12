@@ -29,7 +29,7 @@ function setApiKey(k) { localStorage.setItem("voyager-gemini-key",k) }
 
 async function callGemini(prompt, apiKey) {
   if(!apiKey) throw new Error("Brak klucza API");
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,{
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,{
     method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:1024,temperature:0.8}})
   });
