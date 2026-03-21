@@ -1,0 +1,11 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.beagleappsstudio.voyager",
+    "sha256_cert_fingerprints": [
+      "73:D4:2A:C2:BA:0B:BE:D8:EA:27:08:C2:5F:67:EF:B9:68:B4:AE:E4:51:F5:F1:FF:4A:FA:9B:60:F2:8D:A1:6C",
+      "59:2A:F3:D3:93:C7:C3:FB:C3:0C:D0:5F:7C:65:92:EC:08:50:F5:C6:20:C7:24:FA:0D:38:5C:80:8D:14:46:70"
+    ]
+  }
+}]
