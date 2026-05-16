@@ -1,4 +1,4 @@
-const CACHE_NAME = 'voyager-v2';
+const CACHE_NAME = 'voyager-v3';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -26,8 +26,12 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET') return;
   if (!request.url.startsWith('http')) return;
   if (request.url.includes('api.anthropic.com')) return;
+  if (request.url.includes('api.groq.com')) return;
   if (request.url.includes('api.open-meteo.com')) return;
   if (request.url.includes('nominatim.openstreetmap.org')) return;
+  if (request.url.includes('api.frankfurter.dev')) return;
+  if (request.url.includes('api.opentripmap.com')) return;
+  if (request.url.includes('wikipedia.org')) return;
 
   event.respondWith(
     fetch(request).then(response => {
