@@ -43,6 +43,25 @@ jobs:
         with:
           path: dist
 
-      - name: Deploy
+      - name: Deploy (attempt 1)
         id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before retry 2
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+
+      - name: Deploy (attempt 2)
+        id: deployment2
+        if: steps.deployment.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before retry 3
+        if: steps.deployment.outcome == 'failure' && steps.deployment2.outcome == 'failure'
+        run: sleep 60
+
+      - name: Deploy (attempt 3)
+        if: steps.deployment.outcome == 'failure' && steps.deployment2.outcome == 'failure'
         uses: actions/deploy-pages@v4
