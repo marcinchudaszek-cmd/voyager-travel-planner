@@ -134,7 +134,12 @@ const DEFAULT_MODEL="llama-3.3-70b-versatile";
 function loadModel(){try{return localStorage.getItem(MODEL_KEY)||DEFAULT_MODEL}catch(e){return DEFAULT_MODEL}}
 function saveModel(m){try{localStorage.setItem(MODEL_KEY,m)}catch(e){}}
 const isModelProblem=(res,data)=>{const msg=String((data&&data.error&&(data.error.message||data.error.code))||"").toLowerCase();return res.status===404||(res.status===400&&/model|decommission|deprecat|not found|does not exist|no longer/.test(msg))};
-async function pickModel(key){try{const r=await fetch("https://api.groq.com/openai/v1/models",{headers:{Authorization:`Bearer ${key}`}});const d=await r.json();const ids=(d.data||[]).map(m=>m.id).filter(id=>!/whisper|tts|guard|embed|vision|prompt/i.test(id));return ids.find(id=>/llama.*70b/i.test(id))||ids.find(id=>/llama/i.test(id))||ids[0]||null}catch(e){return null}}
+/* Odsiewamy modele, ktore nie sluza do rozmowy: mowa, moderacja,
+   embeddingi. Orpheus/PlayAI to synteza mowy - nie maja "tts" w nazwie,
+   dlatego lista wykluczen jest jawna, a nie zgadywana. */
+const BAD_MODEL=/whisper|tts|orpheus|canopylabs|playai|guard|embed|moderation|rerank|safety|prompt/i;
+const scoreModel=(id)=>{const t=String(id).toLowerCase();let n=0;if(/llama/.test(t))n+=50;if(/gpt|qwen|kimi|deepseek|mixtral|gemma/.test(t))n+=35;if(/70b|maverick|scout|versatile/.test(t))n+=20;if(/instruct|chat|versatile/.test(t))n+=12;if(/instant|8b|mini|nano/.test(t))n+=4;return n};
+async function chatModels(key){try{const r=await fetch("https://api.groq.com/openai/v1/models",{headers:{Authorization:`Bearer ${key}`}});const d=await r.json();return (d.data||[]).filter(m=>m&&m.id&&!BAD_MODEL.test(m.id)&&m.active!==false&&(!m.context_window||m.context_window>=8000)).map(m=>m.id).sort((a,b)=>scoreModel(b)-scoreModel(a))}catch(e){return[]}}
 const groqError=(res,data)=>{const m=data&&data.error&&data.error.message;
  if(res.status===401||res.status===403)return "⚠️ Klucz API został odrzucony. Wpisz go ponownie przez ⚙️ — nowy pobierzesz z console.groq.com.";
  if(res.status===429)return "⚠️ Wyczerpany limit zapytań Groq. Spróbuj za kilka minut.";
@@ -151,7 +156,7 @@ try{const days2=trip?.startDate&&trip?.endDate?Math.ceil((new Date(trip.endDate)
 const history=msgs.filter(m=>m.text).map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.text}));
 let mdl=loadModel();const doCall=async()=>await fetch("https://api.groq.com/openai/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},body:JSON.stringify({model:mdl,messages:[{role:"system",content:`Jesteś ekspertem od podróży, odpowiadasz WYŁĄCZNIE po polsku. Zasady formatowania:\n1. Lista miejsc/atrakcji: każde w OSOBNEJ LINII w formacie "Oficjalna nazwa — opis (cena lub godziny)"\n2. Plan dnia: każda linia "HH:MM — aktywność"\n3. Używaj wyłącznie OFICJALNYCH nazw geograficznych (np. "Colosseum", "Marienplatz", "Sagrada Família")\n4. Odpowiedź max 10 pozycji, bez wstępów i podsumowań\n5. Dodawaj emoji przed każdą pozycją\n6. Przy miejscach podaj praktyczną informację (cena biletu, godz. otwarcia, adres)\n${ctx}`},...history,{role:"user",content:txt}],temperature:0.7,max_tokens:1200})});let res=await doCall();
 let data=await res.json().catch(()=>({}));
-if(!res.ok&&isModelProblem(res,data)){const alt=await pickModel(apiKey);if(alt&&alt!==mdl){saveModel(alt);mdl=alt;setMsgs(m=>[...m,{role:"assistant",text:`ℹ️ Model „${DEFAULT_MODEL}" został wycofany przez Groq. Przełączam się na „${alt}".`}]);res=await doCall();data=await res.json().catch(()=>({}))}}
+if(!res.ok&&isModelProblem(res,data)){const kandydaci=(await chatModels(apiKey)).filter(id=>id!==mdl).slice(0,5);for(const kand of kandydaci){mdl=kand;res=await doCall();data=await res.json().catch(()=>({}));if(res.ok&&data.choices?.[0]?.message?.content){saveModel(kand);setMsgs(m=>[...m,{role:"assistant",text:`ℹ️ Poprzedni model został wycofany przez Groq. Przełączyłem się na „${kand}”.`}]);break}}}
 const reply=data.choices?.[0]?.message?.content;
 if(reply)setMsgs(m=>[...m,{role:"assistant",text:reply}]);else setMsgs(m=>[...m,{role:"assistant",text:groqError(res,data)}])}catch(e){setMsgs(m=>[...m,{role:"assistant",text:"⚠️ Błąd: "+e.message}])}setLoading(false)};
 const quickQ=[`Co warto zobaczyć w ${trip?.destination||"okolicy"}?`,`Najlepsze restauracje w ${trip?.destination||"okolicy"}`,`Ciekawostki o ${trip?.destination||"tym miejscu"}`,`Plan na 1 dzień w ${trip?.destination||"okolicy"}`];
