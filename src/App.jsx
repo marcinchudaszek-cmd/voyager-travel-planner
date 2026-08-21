@@ -122,7 +122,61 @@ function MiniMap({trip}){const ref=useRef(null);const mapInst=useRef(null);const
 
 /* ═══ PDF ═══ */
 function exportPDF(trip){const days=trip.startDate&&trip.endDate?Math.ceil((new Date(trip.endDate)-new Date(trip.startDate))/864e5)+1:0;const spent=trip.expenses.reduce((s,e)=>s+e.amount,0);const byCat=CATEGORIES.map(c=>({c,t:trip.expenses.filter(e=>e.category===c).reduce((s,e)=>s+e.amount,0)})).filter(x=>x.t>0);
-const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(trip.name)}</title><style>body{font-family:Arial,sans-serif;max-width:700px;margin:0 auto;padding:24px;color:#111111;font-size:13px}h1{font-size:24px}h2{font-size:16px;margin-top:24px;border-bottom:2px solid #8E1F16;padding-bottom:4px;color:#8E1F16}table{width:100%;border-collapse:collapse;margin:8px 0}th,td{border:1px solid #E2DFD9;padding:8px;text-align:left;font-size:12px}th{background:#F4F2ED}@media print{body{padding:12px}}</style></head><body><h1>${esc(trip.coverEmoji)} ${esc(trip.name)}</h1><div style="color:#8A837C;margin-bottom:20px">${esc(trip.destination||"")}${trip.startDate?` • ${trip.startDate} → ${trip.endDate}`:""}</div>${trip.places.length?`<h2>📍 Miejsca</h2><table><tr><th>Nazwa</th><th>Priorytet</th><th>Status</th></tr>${trip.places.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.priority)}</td><td>${p.visited?"✅":"⬜"}</td></tr>`).join("")}</table>`:""}${trip.itinerary.length?`<h2>🗓️ Plan dnia</h2>${trip.itinerary.map(d=>`<h3>${esc(d.day)}${d.title?" — "+esc(d.title):""}</h3><table>${d.items.filter(i=>i.activity).map(i=>`<tr><td>${esc(i.time)}</td><td>${esc(i.activity)}</td></tr>`).join("")}</table>`).join("")}`:""}${byCat.length?`<h2>💰 Budżet (${spent.toFixed(2)} ${trip.currency})</h2><table>${byCat.map(({c,t})=>`<tr><td>${c}</td><td>${t.toFixed(2)}</td><td>${(t/spent*100).toFixed(0)}%</td></tr>`).join("")}</table>`:""}${trip.packing&&trip.packing.length?`<h2>🎒 Pakowanie</h2><table>${trip.packing.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.packed?"✅":"⬜"}</td></tr>`).join("")}</table>`:""}${trip.notes.length?`<h2>📝 Notatki</h2>${trip.notes.map(n=>`<div style="margin:12px 0;padding:12px;background:#F4F2ED;border-radius:8px"><strong>${esc(n.title)}</strong><p>${esc(n.content)}</p></div>`).join("")}`:""}<div style="margin-top:32px;text-align:center;color:#8A837C;font-size:11px">🧭 Voyager</div></body></html>`;
+const dl=(iso,opts)=>{try{return new Date(iso+"T12:00:00").toLocaleDateString("pl-PL",opts)}catch(e){return iso}};
+const dlugaData=(iso)=>dl(iso,{weekday:"long",day:"numeric",month:"long"});
+const krotkaData=(iso)=>dl(iso,{day:"numeric",month:"long",year:"numeric"});
+const okres=trip.startDate?(trip.endDate?`${krotkaData(trip.startDate)} – ${krotkaData(trip.endDate)}`:krotkaData(trip.startDate)):"";
+const naglowek=[esc(trip.destination||""),okres,days?`${days} dni`:""].filter(Boolean).join("  ·  ");
+const packing=trip.packing||[];
+const kategoriePak=[...new Set(packing.map(x=>x.category||"Inne"))];
+const priorytet={high:"wysoki",medium:"średni",low:"niski"};
+const html=`<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>${esc(trip.name)}</title><style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Work Sans',system-ui,Arial,sans-serif;max-width:720px;margin:0 auto;padding:38px 30px 46px;color:#111;font-size:13px;line-height:1.62;background:#fff}
+.kicker{font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:#8A837C;font-weight:600}
+h1{font-family:'Fraunces',Georgia,serif;font-size:42px;font-weight:700;letter-spacing:-.025em;line-height:1.02;margin-top:10px}
+.dateline{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:#8A837C;font-weight:600;margin-top:12px}
+.rule{height:2px;background:#111;margin-top:12px}
+.figs{display:flex}
+.fig{flex:1;text-align:center;border-left:1px solid #E2DFD9;padding:15px 4px}
+.fig:first-child{border-left:0}
+.fig b{display:block;font-family:'Fraunces',Georgia,serif;font-size:27px;line-height:1;font-variant-numeric:tabular-nums}
+.fig span{display:block;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#8A837C;margin-top:6px;font-weight:600}
+h2{font-family:'Fraunces',Georgia,serif;font-size:21px;font-weight:700;margin-top:32px;padding-bottom:7px;border-bottom:2px solid #111;break-after:avoid;page-break-after:avoid}
+h3{font-family:'Fraunces',Georgia,serif;font-size:15px;font-weight:600;margin-top:18px;text-transform:capitalize;break-after:avoid;page-break-after:avoid}
+table{width:100%;border-collapse:collapse;margin-top:4px}
+th{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#8A837C;font-weight:600;border-bottom:1px solid #E2DFD9;padding:7px 0;text-align:left}
+td{padding:7px 0;border-bottom:1px solid #EDEBE5;font-size:12.5px;vertical-align:top}
+tr{break-inside:avoid;page-break-inside:avoid}
+.godz{font-family:'DM Mono',ui-monospace,monospace;color:#8E1F16;width:58px;font-size:11.5px}
+.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;width:88px}
+.pct{text-align:right;width:52px;color:#8A837C;font-variant-numeric:tabular-nums}
+.muted{color:#8A837C}
+.suma{display:flex;align-items:baseline;gap:9px;margin-top:14px}
+.suma b{font-family:'Fraunces',Georgia,serif;font-size:32px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.suma span{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#8A837C;font-weight:600}
+.notatka{break-inside:avoid;page-break-inside:avoid;margin-top:20px;padding-top:18px;border-top:1px solid #E2DFD9}
+.notatka h4{font-family:'Fraunces',Georgia,serif;font-size:18px;font-weight:700}
+.notatka p{margin-top:7px;white-space:pre-wrap}
+.zdjecia{display:flex;gap:7px;margin-top:11px}
+.zdjecia img{width:49%;max-height:62mm;object-fit:cover}
+footer{margin-top:40px;padding-top:13px;border-top:1px solid #E2DFD9;text-align:center;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#8A837C}
+@page{margin:15mm}
+@media print{body{padding:0;max-width:none}}
+</style></head><body>
+<p class="kicker">${esc(trip.coverEmoji)} Voyager · dziennik podróży</p>
+<h1>${esc(trip.name)}</h1>
+${naglowek?`<p class="dateline">${naglowek}</p>`:""}
+<div class="rule"></div>
+<div class="figs"><div class="fig"><b>${trip.places.length}</b><span>miejsc</span></div><div class="fig"><b>${trip.itinerary.length||"—"}</b><span>dni planu</span></div><div class="fig"><b>${spent>0?spent.toFixed(0):"—"}</b><span>${esc(trip.currency)}</span></div></div>
+${trip.places.length?`<h2>Miejsca</h2><table><tr><th>Nazwa</th><th>Priorytet</th><th style="text-align:right">Status</th></tr>${trip.places.map(x=>`<tr><td>${esc(x.name)}${x.description?`<div class="muted" style="font-size:11px">${esc(x.description)}</div>`:""}</td><td class="muted">${priorytet[x.priority]||esc(x.priority)}</td><td style="text-align:right">${x.visited?"odwiedzone":"—"}</td></tr>`).join("")}</table>`:""}
+${trip.itinerary.length?`<h2>Plan dnia</h2>${trip.itinerary.map(d=>`<h3>${dlugaData(d.day)}</h3>${d.title?`<p class="muted" style="font-size:11.5px">${esc(d.title)}</p>`:""}<table>${d.items.filter(i=>i.activity).map(i=>`<tr><td class="godz">${esc(i.time)}</td><td>${esc(i.activity)}</td></tr>`).join("")}</table>`).join("")}`:""}
+${byCat.length?`<h2>Budżet</h2><div class="suma"><b>${spent.toFixed(2)}</b><span>${esc(trip.currency)}${days>0?` · ok. ${(spent/days).toFixed(0)} na dzień`:""}</span></div><table>${byCat.sort((a,b)=>b.t-a.t).map(({c,t})=>`<tr><td>${c}</td><td class="num">${t.toFixed(2)}</td><td class="pct">${(t/spent*100).toFixed(0)}%</td></tr>`).join("")}</table>`:""}
+${packing.length?`<h2>Pakowanie</h2>${kategoriePak.map(kat=>{const it=packing.filter(x=>(x.category||"Inne")===kat);return `<h3>${esc(kat)} <span class="muted" style="font-size:11px">${it.filter(x=>x.packed).length}/${it.length}</span></h3><table>${it.map(x=>`<tr><td>${esc(x.name)}</td><td style="text-align:right;width:90px" class="muted">${x.packed?"spakowane":"—"}</td></tr>`).join("")}</table>`}).join("")}`:""}
+${trip.notes.length?`<h2>Notatki</h2>${trip.notes.map(n=>`<div class="notatka"><h4>${esc(n.title)}</h4><p class="muted" style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;margin-top:4px">${krotkaData(n.date)}</p>${n.content?`<p>${esc(n.content)}</p>`:""}${(n.photos||[]).length?`<div class="zdjecia">${n.photos.slice(0,2).map(f=>`<img src="${f.data}" alt="">`).join("")}</div>`:""}</div>`).join("")}`:""}
+<footer>Voyager · wygenerowano ${krotkaData(new Date().toISOString().split("T")[0])}</footer>
+</body></html>`;
 const w=window.open("","_blank");if(w){w.document.write(html);w.document.close();setTimeout(()=>w.print(),500)}else{const blob=new Blob([html],{type:"text/html;charset=utf-8"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=(trip.name||"voyager")+".html";document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(url),1000)}}
 
 const distKm=(la1,lo1,la2,lo2)=>{const R=6371,dL=(la2-la1)*Math.PI/180,dO=(lo2-lo1)*Math.PI/180,a=Math.sin(dL/2)**2+Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dO/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a))};
