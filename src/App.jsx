@@ -318,7 +318,52 @@ function HomeScreen(){
               })}
             </div>
           </>}
+      <Backup/>
     </div>
+  </div>;
+}
+
+/* Kopia zapasowa — podróże leżą tylko w pamięci przeglądarki,
+   więc wyczyszczenie danych Chrome kasuje je bez śladu. */
+function Backup(){
+  const {trips,setTrips,s} = useApp();
+  const [msg,setMsg] = useState("");
+  const fileRef = useRef(null);
+  const doExport = () => {
+    const blob = new Blob([JSON.stringify({app:"voyager",version:1,exported:new Date().toISOString(),trips},null,1)],{type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `voyager-kopia-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    setMsg(`Zapisano ${trips.length} ${trips.length===1?"podróż":"podróży"}.`);
+  };
+  const doImport = async (e) => {
+    const file = e.target.files&&e.target.files[0]; e.target.value = "";
+    if(!file) return;
+    try{
+      const d = JSON.parse(await file.text());
+      const list = Array.isArray(d)?d:d&&d.trips;
+      if(!Array.isArray(list)) throw new Error();
+      const ok = list.filter(t=>t&&t.id&&typeof t.name==="string").map(t=>({...defaultTrip(),...t}));
+      const have = new Set(trips.map(t=>t.id));
+      const fresh = ok.filter(t=>!have.has(t.id));
+      if(fresh.length) setTrips(p=>[...p,...fresh]);
+      if(!ok.length) setMsg("W pliku nie ma żadnej podróży.");
+      else if(!fresh.length) setMsg("Wszystkie podróże z pliku już są w aplikacji.");
+      else if(fresh.length===ok.length) setMsg(`Wczytano podróże: ${fresh.length}.`);
+      else setMsg(`Wczytano podróże: ${fresh.length}. Pozostałe (${ok.length-fresh.length}) już są w aplikacji.`);
+    }catch{setMsg("To nie jest plik kopii Voyagera.")}
+  };
+  return <div style={s.backup}>
+    <p style={s.backupTtl}>Kopia zapasowa</p>
+    <p style={s.backupTxt}>Podróże są zapisane tylko na tym urządzeniu. Zapisz plik kopii, żeby nie stracić ich po wyczyszczeniu danych przeglądarki albo przy zmianie telefonu.</p>
+    <div style={{display:"flex",gap:8}}>
+      <button onClick={doExport} disabled={!trips.length} className="vy-btn" style={{...s.b2,padding:"13px 8px",opacity:trips.length?1:.5}}>Zapisz kopię</button>
+      <button onClick={()=>fileRef.current&&fileRef.current.click()} className="vy-btn" style={{...s.b2,padding:"13px 8px"}}>Wczytaj kopię</button>
+      <input ref={fileRef} type="file" accept="application/json,.json" onChange={doImport} style={{display:"none"}}/>
+    </div>
+    {msg && <p role="status" style={s.backupTxt}>{msg}</p>}
   </div>;
 }
 
@@ -799,7 +844,8 @@ function TripForm(){
   const {edit,setForm,setEdit,setTrips,setActive,s} = useApp();
   const [f,sF] = useState(edit||defaultTrip());
   const [status,setStatus] = useState(f.destLat!=null?"✓":"");
-  const em = ["✈️","🏖️","🏔️","🌍","🗼","🏛️","🎡","🚗","🛳️","🌴","🏕️","🎿"];
+  const [err,setErr] = useState("");
+  const em =["✈️","🏖️","🏔️","🌍","🗼","🏛️","🎡","🚗","🛳️","🌴","🏕️","🎿"];
   const geocode = async (dest) => {
     if(!dest.trim()) return;
     setStatus("…");
@@ -812,20 +858,21 @@ function TripForm(){
   };
   return <div style={s.modal}><div style={s.mc}>
     <h3 style={s.fT}>{edit?"Edytuj podróż":"Nowa podróż"}</h3>
-    <div style={s.eR}>{em.map(e=><button key={e} onClick={()=>sF({...f,coverEmoji:e})} style={{...s.eB,...(f.coverEmoji===e?s.eBA:{})}}>{e}</button>)}</div>
-    <input placeholder="Nazwa podróży" value={f.name} onChange={e=>sF({...f,name:e.target.value})} style={s.inp}/>
+    <div style={s.eR}>{em.map(e=><button key={e} onClick={()=>sF({...f,coverEmoji:e})} aria-label={`Ikona ${e}`} aria-pressed={f.coverEmoji===e} style={{...s.eB,...(f.coverEmoji===e?s.eBA:{})}}>{e}</button>)}</div>
+    <input placeholder="Nazwa podróży" value={f.name} onChange={e=>{sF({...f,name:e.target.value});setErr("")}} style={s.inp}/>
     <div style={{position:"relative"}}>
       <input placeholder="Cel (miasto lub kraj)" value={f.destination} onChange={e=>{sF({...f,destination:e.target.value});setStatus("")}} onBlur={e=>geocode(e.target.value)} style={s.inp}/>
       {status && <span style={s.inpStatus}>{status}</span>}
     </div>
     <div style={s.formRow}>
-      <input type="date" value={f.startDate} onChange={e=>sF({...f,startDate:e.target.value})} style={{...s.inp,flex:1}}/>
-      <input type="date" value={f.endDate} onChange={e=>sF({...f,endDate:e.target.value})} style={{...s.inp,flex:1}}/>
+      <label style={s.dLbl}>Od<input type="date" value={f.startDate} max={f.endDate||undefined} onChange={e=>{sF({...f,startDate:e.target.value});setErr("")}} style={{...s.inp,minWidth:0}}/></label>
+      <label style={s.dLbl}>Do<input type="date" value={f.endDate} min={f.startDate||undefined} onChange={e=>{sF({...f,endDate:e.target.value});setErr("")}} style={{...s.inp,minWidth:0}}/></label>
     </div>
     <select value={f.currency} onChange={e=>sF({...f,currency:e.target.value})} style={s.inp}>{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select>
+    {err && <p role="alert" style={s.fErr}>{err}</p>}
     <div style={s.formRow}>
       <button onClick={()=>{setForm(null);setEdit(null)}} className="vy-btn" style={s.b2}>Anuluj</button>
-      <button onClick={()=>{if(!f.name)return;if(edit)setTrips(p=>p.map(t=>t.id===f.id?f:t));else{setTrips(p=>[...p,f]);setActive(f.id)}setForm(null);setEdit(null)}} className="vy-btn" style={s.b1}>{edit?"Zapisz":"Utwórz"}</button>
+      <button onClick={()=>{if(!f.name.trim()){setErr("Podaj nazwę podróży.");return}if(f.startDate&&f.endDate&&f.endDate<f.startDate){setErr("Data powrotu nie może być wcześniejsza niż data wyjazdu.");return}if(edit)setTrips(p=>p.map(t=>t.id===f.id?f:t));else{setTrips(p=>[...p,f]);setActive(f.id)}setForm(null);setEdit(null)}} className="vy-btn" style={s.b1}>{edit?"Zapisz":"Utwórz"}</button>
     </div>
   </div></div>;
 }
@@ -1075,6 +1122,9 @@ const mkStyles = (c) => ({
   emptyHome:{padding:"36px 0"},
   emptyLead:{fontFamily:SERIF,fontSize:22,fontWeight:600,color:c.ink,marginBottom:8},
   emptyBody:{fontSize:14.5,color:c.muted,lineHeight:1.65,margin:"10px 0 18px",maxWidth:"46ch"},
+  backup:{marginTop:44,paddingTop:18,borderTop:`1px solid ${c.rule}`,display:"flex",flexDirection:"column",gap:10},
+  backupTtl:{fontSize:11,fontWeight:700,letterSpacing:".14em",textTransform:"uppercase",color:c.ink},
+  backupTxt:{fontSize:13,color:c.muted,lineHeight:1.55},
 
   /* nagłówek podróży */
   tHdr:{background:c.paper,borderBottom:`2px solid ${c.ink}`,padding:"10px 20px 12px",paddingTop:"max(10px,env(safe-area-inset-top))",flexShrink:0},
@@ -1090,8 +1140,8 @@ const mkStyles = (c) => ({
   pageTitle:{fontFamily:SERIF,fontSize:28,fontWeight:700,letterSpacing:"-.02em",color:c.ink},
 
   /* pasek dolny */
-  btmBar:{display:"flex",background:c.paper,borderTop:`1px solid ${c.rule}`,flexShrink:0,paddingBottom:"env(safe-area-inset-bottom,0px)"},
-  btmBtn:{flex:1,background:"none",border:"none",borderTop:"2px solid transparent",padding:"11px 2px 13px",cursor:"pointer",fontSize:9.5,fontWeight:600,letterSpacing:".1em",textTransform:"uppercase",color:c.muted},
+  btmBar:{display:"flex",background:c.paper,borderTop:`1px solid ${c.rule}`,flexShrink:0,padding:"0 6px",paddingBottom:"env(safe-area-inset-bottom,0px)"},
+  btmBtn:{flex:1,minWidth:0,background:"none",border:"none",borderTop:"2px solid transparent",padding:"11px 2px 13px",cursor:"pointer",fontSize:9.5,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",color:c.muted},
   btmOn:{color:c.ink,borderTopColor:c.accent},
 
   /* spis treści */
@@ -1199,6 +1249,8 @@ const mkStyles = (c) => ({
   inp:{width:"100%",padding:"12px 13px",border:`1px solid ${c.rule}`,borderRadius:2,fontSize:14,fontFamily:SANS,marginBottom:10,outline:"none",background:c.surf,color:c.ink},
   inpStatus:{position:"absolute",right:12,top:12,fontSize:13,color:c.muted},
   formRow:{display:"flex",gap:8,marginTop:8},
+  dLbl:{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:4,fontSize:11,fontWeight:600,letterSpacing:".08em",textTransform:"uppercase",color:c.muted},
+  fErr:{fontSize:13,color:c.accent,margin:"2px 0 4px"},
   eR:{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14},
   eB:{width:38,height:38,borderRadius:2,border:`1px solid ${c.rule}`,background:c.surf,fontSize:18,cursor:"pointer"},
   eBA:{borderColor:c.ink,background:c.paper2},
