@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 
-const TABS = ["Przegląd","Mapa","Miejsca","Plan dnia","Budżet","Pakowanie","Notatki","Tłumacz","SOS","Galeria"];
-const ICONS = {"Przegląd":"📋","Mapa":"🗺️","Miejsca":"📍","Plan dnia":"🗓️","Budżet":"💰","Pakowanie":"🎒","Notatki":"📝","Tłumacz":"🌍","SOS":"🆘","Galeria":"📸"};
+const TABS = ["Przegląd","Mapa","Miejsca","Plan dnia","Rezerwacje","Budżet","Pakowanie","Notatki","Tłumacz","SOS","Galeria"];
+const ICONS = {"Przegląd":"📋","Mapa":"🗺️","Miejsca":"📍","Plan dnia":"🗓️","Rezerwacje":"🎫","Budżet":"💰","Pakowanie":"🎒","Notatki":"📝","Tłumacz":"🌍","SOS":"🆘","Galeria":"📸"};
 const CURRENCIES = ["PLN","EUR","USD","GBP","CZK","CHF","SEK","NOK","DKK","HUF","TRY","JPY","THB"];
+const BOOK_TYPES = {"Lot":"✈️","Pociąg":"🚆","Autobus":"🚌","Prom":"⛴️","Nocleg":"🏨","Auto":"🚗","Bilet":"🎟️","Inne":"📌"};
 const CATEGORIES = ["Transport","Nocleg","Jedzenie","Atrakcje","Zakupy","Inne"];
 const CAT_ICONS = {Transport:"✈️",Nocleg:"🏨",Jedzenie:"🍽️",Atrakcje:"🎭",Zakupy:"🛍️",Inne:"📦"};
 const CAT_COLORS = {Transport:"#4A90D9",Nocleg:"#8B5CF6",Jedzenie:"#F59E0B",Atrakcje:"#EC4899",Zakupy:"#10B981",Inne:"#6B7280"};
@@ -52,7 +53,7 @@ const EMERGENCY_DATA = {
 
 const esc = (v) => String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
-const defaultTrip = () => ({id:uid(),name:"",destination:"",startDate:"",endDate:"",coverEmoji:"✈️",places:[],itinerary:[],expenses:[],notes:[],packing:[],currency:"PLN",destLat:null,destLng:null,destCC:""});
+const defaultTrip = () => ({id:uid(),name:"",destination:"",startDate:"",endDate:"",coverEmoji:"✈️",places:[],itinerary:[],bookings:[],expenses:[],notes:[],packing:[],currency:"PLN",destLat:null,destLng:null,destCC:""});
 function saveTrips(t){try{localStorage.setItem("voyager-data",JSON.stringify(t));return true}catch(e){return false}}
 function loadTrips(){try{const d=localStorage.getItem("voyager-data");return d?JSON.parse(d):[]}catch(e){return[]}}
 function saveApiKey(k){try{localStorage.setItem("voyager-apikey",k)}catch(e){}}
@@ -256,7 +257,88 @@ const COVERS = [
   "radial-gradient(circle at 68% 20%,#FFE9A8 0 5%,transparent 30%),linear-gradient(180deg,#120E1F 0%,#2A1E44 45%,#6B3F6E 72%,#141019 100%)"
 ];
 const coverIdx = (t) => {const k=(t.destination||t.name||"x");let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))>>>0;return h%COVERS.length};
-const coverPhoto = (t) => {for(const n of (t.notes||[]))if(n.photos&&n.photos[0])return n.photos[0].data;return null};
+const coverPhoto = (t) => {if(t.cover)return t.cover.data||t.cover.url;for(const n of (t.notes||[]))if(n.photos&&n.photos[0])return n.photos[0].data;return null};
+/* Gradient zostaje pod zdjęciem — gdy obrazek się nie wczyta (offline), okładka nie jest pusta. */
+const coverStyle = (t,a=.15,b=.72) => {const p=coverPhoto(t);return p?{backgroundImage:`linear-gradient(180deg,rgba(10,8,6,${a}),rgba(10,8,6,${b})),url("${p}"),${COVERS[coverIdx(t)]}`,backgroundSize:"cover",backgroundPosition:"center"}:{backgroundImage:COVERS[coverIdx(t)]}};
+
+/* Zdjęcia celu z artykułu w Wikipedii. Herby, flagi i mapy to zwykle SVG/PNG,
+   ale bywają też jako JPG — odsiewa je nazwa pliku. null = błąd sieci. */
+const WIKI_BAD = /map|karte|harta|satelli|location|locator|coa|herb|flag|emblem|escudo|wig_|diagram|logo|collage|kola[zż]|schemat|plan_|1[89]\d\d_|_1[89][0-5]\d/i;
+async function destPhotos(dest){
+  const q = (dest||"").split(",")[0].trim();
+  if(!q) return [];
+  const out = [];let failed = 0;
+  for(const lang of ["pl","en"]){
+    try{
+      const r = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/media-list/${encodeURIComponent(q.replace(/ /g,"_"))}`);
+      if(!r.ok) continue;
+      const d = await r.json();
+      for(const it of d.items||[]){
+        const title = it.title||"";
+        if(it.type!=="image"||!/\.jpe?g$/i.test(title)||WIKI_BAD.test(title)) continue;
+        const ss = it.srcset||[];const src = (ss[ss.length-1]||{}).src;
+        if(!src) continue;
+        const name = title.replace(/^[^:]+:/,"");
+        if(out.some(o=>o.name===name)) continue;
+        out.push({url:src.startsWith("//")?"https:"+src:src,name,page:`https://commons.wikimedia.org/wiki/File:${encodeURIComponent(name)}`});
+      }
+      if(out.length>=4) break;
+    }catch{failed++}
+  }
+  return failed===2?null:out.slice(0,12);
+}
+
+/* ═══ KALENDARZ (.ics) i UDOSTĘPNIANIE ═══ */
+/* Rezerwacja bez godziny (np. nocleg) idzie na koniec swojego dnia, bez daty — na koniec listy. */
+const bookingKey = (b) => (b.date||"9999")+(b.time||"24:00");
+const byBookingTime = (a,b) => bookingKey(a).localeCompare(bookingKey(b));
+const dayMonth = (d) => new Date(d+"T12:00:00").toLocaleDateString("pl-PL",{day:"numeric",month:"short"});
+/* „RRRR-MM-DDGG:MM” w czasie lokalnym — porównywalne z b.date+b.time rezerwacji. */
+const nowStamp = () => {const d=new Date(),p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}${p(d.getHours())}:${p(d.getMinutes())}`};
+const ymd =(dt) => `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,"0")}${String(dt.getDate()).padStart(2,"0")}`;
+const icsTime = (day,time,addMin=0) => {const [h,m]=(time||"0:0").split(":").map(Number);const dt=new Date(day+"T00:00:00");dt.setHours(h||0,(m||0)+addMin);return `${ymd(dt)}T${String(dt.getHours()).padStart(2,"0")}${String(dt.getMinutes()).padStart(2,"0")}00`};
+const icsNextDay = (day) => {const dt=new Date(day+"T12:00:00");dt.setDate(dt.getDate()+1);return ymd(dt)};
+function icsFold(line){
+  const enc = new TextEncoder();let out = "",cur = "",bytes = 0;
+  for(const ch of line){const b=enc.encode(ch).length;if(bytes+b>73){out+=cur+"\r\n ";cur="";bytes=1}cur+=ch;bytes+=b}
+  return out+cur;
+}
+function exportICS(trip){
+  const esc = v => String(v||"").replace(/\\/g,"\\\\").replace(/\r?\n/g,"\\n").replace(/[,;]/g,m=>"\\"+m);
+  const stamp = new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d+/,"");
+  const ev = [];
+  const add = (id,summary,start,end,allDay,desc,loc) => ev.push(["BEGIN:VEVENT",`UID:${id}@voyager.beagleapps.pl`,`DTSTAMP:${stamp}`,
+    allDay?`DTSTART;VALUE=DATE:${start}`:`DTSTART:${start}`,allDay?`DTEND;VALUE=DATE:${end}`:`DTEND:${end}`,
+    `SUMMARY:${esc(summary)}`,desc?`DESCRIPTION:${esc(desc)}`:"",loc?`LOCATION:${esc(loc)}`:"","END:VEVENT"].filter(Boolean));
+  if(trip.startDate) add(trip.id,`${trip.coverEmoji||"✈️"} ${trip.name}`,trip.startDate.replace(/-/g,""),icsNextDay(trip.endDate||trip.startDate),true,trip.destination,trip.destination);
+  trip.itinerary.forEach(d=>d.items.filter(i=>i.activity).forEach((it,i)=>{
+    if(it.time) add(`${d.id}-${i}`,it.activity,icsTime(d.day,it.time),icsTime(d.day,it.time,60),false,d.title,"");
+    else add(`${d.id}-${i}`,it.activity,d.day.replace(/-/g,""),icsNextDay(d.day),true,d.title,"");
+  }));
+  (trip.bookings||[]).filter(b=>b.date).forEach(b=>{
+    const sum = `${BOOK_TYPES[b.type]||"📌"} ${b.title||b.type}`;
+    const desc = [b.code&&`Nr rezerwacji: ${b.code}`,b.note].filter(Boolean).join("\n");
+    if(b.time){const end=b.endDate&&b.endTime?icsTime(b.endDate,b.endTime):icsTime(b.date,b.time,60);add(b.id,sum,icsTime(b.date,b.time),end,false,desc,b.address)}
+    else add(b.id,sum,b.date.replace(/-/g,""),icsNextDay(b.endDate||b.date),true,desc,b.address);
+  });
+  const body = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Beagle Apps Studio//Voyager//PL","CALSCALE:GREGORIAN",...ev.flat(),"END:VCALENDAR"].map(icsFold).join("\r\n")+"\r\n";
+  const blob = new Blob([body],{type:"text/calendar;charset=utf-8"});
+  const url = URL.createObjectURL(blob);const a = document.createElement("a");
+  a.href = url;a.download = `${(trip.name||"voyager").replace(/[\\/:*?"<>|]/g,"")}.ics`;
+  document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(url),1000);
+  return ev.length;
+}
+function tripSummary(trip){
+  const lines = [`${trip.coverEmoji||"✈️"} ${trip.name}`];
+  if(trip.destination) lines.push(trip.destination);
+  if(trip.startDate) lines.push(trip.endDate?`${dayMonth(trip.startDate)} – ${dayMonth(trip.endDate)}`:dayMonth(trip.startDate));
+  const bk = (trip.bookings||[]).filter(b=>b.date).sort(byBookingTime);
+  if(bk.length){lines.push("","Rezerwacje:");bk.forEach(b=>lines.push(`${BOOK_TYPES[b.type]||"📌"} ${dayMonth(b.date)}${b.time?" "+b.time:""} — ${b.title||b.type}`))}
+  trip.itinerary.forEach(d=>{const its=d.items.filter(i=>i.activity);if(!its.length)return;lines.push("",new Date(d.day+"T12:00:00").toLocaleDateString("pl-PL",{weekday:"long",day:"numeric",month:"long"})+(d.title?` — ${d.title}`:""));its.forEach(i=>lines.push(`${i.time?i.time+"  ":"• "}${i.activity}`))});
+  if(trip.places.length){lines.push("","Miejsca: "+trip.places.map(p=>p.name).join(", "))}
+  lines.push("","Zaplanowane w Voyager — voyager.beagleapps.pl");
+  return lines.join("\n");
+}
 
 const MONTHS = ["STY","LUT","MAR","KWI","MAJ","CZE","LIP","SIE","WRZ","PAŹ","LIS","GRU"];
 const shortDate = (d) => {if(!d)return"";const x=new Date(d+"T12:00:00");return `${x.getDate()} ${MONTHS[x.getMonth()]}`};
@@ -298,9 +380,8 @@ function HomeScreen(){
                 const days = t.startDate&&t.endDate?Math.ceil((new Date(t.endDate)-new Date(t.startDate))/864e5)+1:0;
                 const spent = t.expenses.reduce((a,e)=>a+e.amount,0);
                 const until = t.startDate?Math.ceil((new Date(t.startDate+"T00:00:00")-new Date())/864e5):-999;
-                const photo = coverPhoto(t);
                 return <article key={t.id} className="vy-card" onClick={()=>{setActive(t.id);setTab("Przegląd")}} style={{...s.coverCard,animationDelay:`${i*.08}s`}}>
-                  <div style={{...s.cover,...(photo?{backgroundImage:`linear-gradient(180deg,rgba(10,8,6,.15),rgba(10,8,6,.72)),url(${photo})`,backgroundSize:"cover",backgroundPosition:"center"}:{backgroundImage:COVERS[coverIdx(t)]})}}>
+                  <div style={{...s.cover,...coverStyle(t)}}>
                     <div style={s.coverInner}>
                       {until>0 && <span style={s.coverBadge}>za {until} dni</span>}
                       {until<=0&&until>-days && <span style={{...s.coverBadge,background:"rgba(255,255,255,.92)",color:"#1B4D2B"}}>w toku</span>}
@@ -385,6 +466,7 @@ function ContentsSheet(){
     ["Mapa",`${trip.places.filter(p=>p.lat!=null).length} z ${trip.places.length} na mapie`],
     ["Miejsca",trip.places.length?`${trip.places.filter(p=>p.visited).length} z ${trip.places.length} odwiedzonych`:"nic jeszcze"],
     ["Plan dnia",acts?`${trip.itinerary.length} dni · ${acts} aktywności`:"nic jeszcze"],
+    ["Rezerwacje",(trip.bookings||[]).length?`${trip.bookings.length} ${trip.bookings.length===1?"rezerwacja":trip.bookings.length<5?"rezerwacje":"rezerwacji"}`:"nic jeszcze"],
     ["Budżet",spent>0?`${spent.toFixed(0)} ${trip.currency}`:"brak wydatków"],
     ["Pakowanie",packing.length?`${packing.filter(p=>p.packed).length} z ${packing.length} spakowane`:"brak listy"],
     ["Notatki",trip.notes.length?`${trip.notes.length} wpisów`:"nic jeszcze"],
@@ -424,7 +506,16 @@ function OverviewTab(){
   const packing = trip.packing||[];
   const packed = packing.filter(p=>p.packed).length;
   const until = trip.startDate?Math.ceil((new Date(trip.startDate+"T00:00:00")-new Date())/864e5):-999;
-  const photo = coverPhoto(trip);
+  const nowKey = nowStamp();
+  const nextBooking = (trip.bookings||[]).filter(b=>b.date&&(b.date+(b.time||"23:59"))>=nowKey).sort(byBookingTime)[0];
+  const [shareMsg,setShareMsg] = useState("");
+  const share = async () => {
+    const text = tripSummary(trip);
+    try{
+      if(navigator.share){await navigator.share({title:trip.name,text});return}
+      await navigator.clipboard.writeText(text);setShareMsg("Plan skopiowany — wklej go w wiadomości.");
+    }catch(e){if(e&&e.name!=="AbortError")setShareMsg("Nie udało się udostępnić.")}
+  };
 
   const notes = [];
   if(until>0&&until<=7) notes.push(`Wyjazd za ${until} dni — sprawdź, czy wszystko gotowe.`);
@@ -437,12 +528,13 @@ function OverviewTab(){
   const todayPlan = trip.itinerary.find(d=>d.day===today);
 
   return <div style={s.tc}>
-    <div style={{...s.cover,height:200,marginBottom:16,...(photo?{backgroundImage:`linear-gradient(180deg,rgba(10,8,6,.12),rgba(10,8,6,.7)),url(${photo})`,backgroundSize:"cover",backgroundPosition:"center"}:{backgroundImage:COVERS[coverIdx(trip)]})}}>
+    <div style={{...s.cover,height:240,...coverStyle(trip,.12,.7)}}>
       <div style={s.coverInner}>
         <span style={s.coverKicker}>{trip.destination||"Podróż"}</span>
         <h2 style={{...s.coverTitle,fontSize:38}}>{trip.name}</h2>
       </div>
     </div>
+    <CoverControls/>
 
     <Countdown startDate={trip.startDate} endDate={trip.endDate}/>
 
@@ -457,6 +549,11 @@ function OverviewTab(){
     {notes.length>0 && <section style={s.sec}>
       <h3 style={s.secTtl}>Na marginesie</h3>
       {notes.map((n,i)=><p key={i} style={s.marginNote}>{n}</p>)}
+    </section>}
+
+    {nextBooking && <section style={s.sec}>
+      <h3 style={s.secTtl}>Najbliższa rezerwacja</h3>
+      <div onClick={()=>setTab("Rezerwacje")} style={{cursor:"pointer"}}><BookingRow b={nextBooking} compact/></div>
     </section>}
 
     {todayPlan && <section style={s.sec}>
@@ -502,10 +599,94 @@ function OverviewTab(){
     <div style={s.actionRow}>
       <button onClick={()=>{setEdit(trip);setForm("trip")}} className="vy-btn" style={s.bO}>Edytuj podróż</button>
       <button onClick={()=>exportPDF(trip)} className="vy-btn" style={s.bO}>Eksport PDF</button>
+      <button onClick={()=>exportICS(trip)} className="vy-btn" style={s.bO}>Do kalendarza</button>
+      <button onClick={share} className="vy-btn" style={s.bO}>Udostępnij</button>
       {!confirmDel
         ? <button onClick={()=>setConfirmDel(true)} style={{...s.bO,color:s.__accent,borderColor:s.__accent}}>Usuń</button>
         : <button onClick={()=>{setTrips(p=>p.filter(t=>t.id!==trip.id));setActive(null)}} onBlur={()=>setTimeout(()=>setConfirmDel(false),200)} style={{...s.bO,background:s.__accent,color:"#fff",borderColor:s.__accent}}>Na pewno usunąć?</button>}
     </div>
+    {shareMsg && <p role="status" style={s.caption}>{shareMsg}</p>}
+  </div>;
+}
+
+/* Pasek pod okładką: skąd zdjęcie + zmiana. Kolejne „Inne zdjęcie”
+   przechodzi po zdjęciach z artykułu o celu w Wikipedii. */
+function CoverControls(){
+  const {trip,upTrip,s} = useApp();
+  const [list,setList] = useState(null);
+  const [busy,setBusy] = useState(false);
+  const [msg,setMsg] = useState("");
+  const fileRef = useRef(null);
+  const c = trip.cover;
+  const next = async () => {
+    setBusy(true);setMsg("");
+    let l = list;
+    if(!l){l = await destPhotos(trip.destination);if(l)setList(l)}
+    if(l&&l.length){const cur=l.findIndex(x=>c&&x.url===c.url);upTrip({cover:l[(cur+1)%l.length]})}
+    else setMsg(l?"Wikipedia nie ma zdjęć tego miejsca — dodaj własne.":"Brak połączenia z internetem.");
+    setBusy(false);
+  };
+  const own = async (e) => {
+    const f = e.target.files&&e.target.files[0];e.target.value = "";
+    if(!f||!f.type.startsWith("image/")) return;
+    upTrip({cover:{own:true,data:await compressImage(f,1280,.72)}});setMsg("");
+  };
+  const credit = c&&c.url ? <a href={c.page} target="_blank" rel="noopener noreferrer" style={{color:"inherit"}}>Fot. Wikimedia Commons</a>
+    : c&&c.own ? "Twoje zdjęcie" : coverPhoto(trip) ? "Zdjęcie z notatek" : "";
+  return <div style={{marginBottom:16}}>
+    <div style={s.coverBar}>
+      <span style={s.coverCredit}>{credit}</span>
+      <div style={{display:"flex",gap:6,flexShrink:0}}>
+        {trip.destination && <button onClick={next} disabled={busy} style={s.chipBtn}>{busy?"Szukam…":c&&c.url?"Inne zdjęcie":"Zdjęcie celu"}</button>}
+        <button onClick={()=>fileRef.current&&fileRef.current.click()} style={s.chipBtn}>Własne</button>
+        {c && <button onClick={()=>upTrip({cover:null})} style={s.chipBtn} aria-label="Usuń zdjęcie okładki">Usuń</button>}
+        <input ref={fileRef} type="file" accept="image/*" onChange={own} style={{display:"none"}}/>
+      </div>
+    </div>
+    {msg && <p role="status" style={s.caption}>{msg}</p>}
+  </div>;
+}
+
+/* ═══ REZERWACJE ═══ */
+function BookingRow({b,compact}){
+  const {s} = useApp();
+  const [big,setBig] = useState(false);
+  const [copied,setCopied] = useState(false);
+  const past = b.date && (b.date+(b.time||"23:59")) < nowStamp();
+  const when = b.date ? `${new Date(b.date+"T12:00:00").toLocaleDateString("pl-PL",{weekday:"short",day:"numeric",month:"short"})}${b.time?", "+b.time:""}` : "bez daty";
+  const until = b.endDate ? ` → ${dayMonth(b.endDate)}${b.endTime?", "+b.endTime:""}` : "";
+  return <article style={{...s.expRow,alignItems:"flex-start",...(past&&!compact?{opacity:.5}:{})}}>
+    <div style={{...s.catDot,background:s.__soft}}>{BOOK_TYPES[b.type]||"📌"}</div>
+    <div style={{flex:1,minWidth:0}}>
+      <h3 style={s.placeName}>{b.title||b.type}</h3>
+      <p style={{...s.caption,marginTop:2}}>{b.type} · {when}{until}</p>
+      {b.code && <p style={s.bookCode}>
+        <span>{b.code}</span>
+        {!compact && <button onClick={e=>{e.stopPropagation();navigator.clipboard?.writeText(b.code).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),1500)})}} style={s.chipBtn}>{copied?"Skopiowano":"Kopiuj"}</button>}
+      </p>}
+      {!compact && b.address && <p style={s.caption}>{b.address} · <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(b.address)}`} target="_blank" rel="noopener noreferrer" style={{color:s.__accent}}>Prowadź</a></p>}
+      {!compact && b.note && <p style={{...s.caption,whiteSpace:"pre-wrap"}}>{b.note}</p>}
+      {!compact && b.photo && <img src={b.photo} alt="Zdjęcie biletu" onClick={()=>setBig(v=>!v)} style={{display:"block",marginTop:8,borderRadius:2,cursor:"zoom-in",width:big?"100%":96,height:big?"auto":64,objectFit:"cover",border:`1px solid ${s.__rule}`}}/>}
+    </div>
+    {!compact && <BookingActs b={b}/>}
+  </article>;
+}
+function BookingActs({b}){
+  const {trip,upTrip,setForm,setEdit,s} = useApp();
+  return <div style={s.acts}>
+    <button onClick={()=>{setEdit(b);setForm("booking")}} style={s.iB} aria-label="Edytuj">✎</button>
+    <button onClick={()=>upTrip({bookings:(trip.bookings||[]).filter(x=>x.id!==b.id)})} style={s.iB} aria-label="Usuń">✕</button>
+  </div>;
+}
+function BookingsTab(){
+  const {trip,setForm,setEdit,s} = useApp();
+  const list = [...(trip.bookings||[])].sort(byBookingTime);
+  return <div style={s.tc}>
+    <h2 style={s.pageTitle}>Rezerwacje</h2>
+    <div style={s.ruleBold}/>
+    <p style={s.emptyBody}>Loty, pociągi, noclegi i bilety w jednym miejscu — z numerem rezerwacji i zdjęciem biletu, dostępne bez internetu.</p>
+    <div style={s.actionRow}><button onClick={()=>{setForm("booking");setEdit(null)}} className="vy-btn" style={s.b1}>+ Dodaj rezerwację</button></div>
+    {list.length>0 && <div style={{marginTop:14}}>{list.map(b=><BookingRow key={b.id} b={b}/>)}</div>}
   </div>;
 }
 
@@ -835,7 +1016,7 @@ function SosTab(){
   </div>;
 }
 
-const TAB_VIEWS = {"Przegląd":OverviewTab,"Mapa":MapTab,"Miejsca":PlacesTab,"Plan dnia":ItineraryTab,"Budżet":BudgetTab,"Pakowanie":PackingTab,"Notatki":NotesTab,"Tłumacz":PhrasesTab,"SOS":SosTab,"Galeria":GalleryTab};
+const TAB_VIEWS = {"Przegląd":OverviewTab,"Mapa":MapTab,"Miejsca":PlacesTab,"Plan dnia":ItineraryTab,"Rezerwacje":BookingsTab,"Budżet":BudgetTab,"Pakowanie":PackingTab,"Notatki":NotesTab,"Tłumacz":PhrasesTab,"SOS":SosTab,"Galeria":GalleryTab};
 const BOTTOM_TABS = ["Przegląd","Mapa","Miejsca","Plan dnia","Budżet"];
 const BOTTOM_LABELS = {"Przegląd":"Przegląd","Mapa":"Mapa","Miejsca":"Miejsca","Plan dnia":"Plan","Budżet":"Budżet"};
 
@@ -872,7 +1053,7 @@ function TripForm(){
     {err && <p role="alert" style={s.fErr}>{err}</p>}
     <div style={s.formRow}>
       <button onClick={()=>{setForm(null);setEdit(null)}} className="vy-btn" style={s.b2}>Anuluj</button>
-      <button onClick={()=>{if(!f.name.trim()){setErr("Podaj nazwę podróży.");return}if(f.startDate&&f.endDate&&f.endDate<f.startDate){setErr("Data powrotu nie może być wcześniejsza niż data wyjazdu.");return}if(edit)setTrips(p=>p.map(t=>t.id===f.id?f:t));else{setTrips(p=>[...p,f]);setActive(f.id)}setForm(null);setEdit(null)}} className="vy-btn" style={s.b1}>{edit?"Zapisz":"Utwórz"}</button>
+      <button onClick={()=>{if(!f.name.trim()){setErr("Podaj nazwę podróży.");return}if(f.startDate&&f.endDate&&f.endDate<f.startDate){setErr("Data powrotu nie może być wcześniejsza niż data wyjazdu.");return}if(edit){const out={...f};if(edit.destination!==f.destination&&!(f.cover&&f.cover.own))delete out.cover;setTrips(p=>p.map(t=>t.id===f.id?out:t))}else{setTrips(p=>[...p,f]);setActive(f.id)}setForm(null);setEdit(null)}} className="vy-btn" style={s.b1}>{edit?"Zapisz":"Utwórz"}</button>
     </div>
   </div></div>;
 }
@@ -942,6 +1123,54 @@ function ExpenseForm(){
   </div></div>;
 }
 
+function BookingForm(){
+  const {trip,upTrip,edit,setForm,setEdit,s} = useApp();
+  const [f,sF] = useState(edit||{id:uid(),type:"Lot",title:"",date:trip.startDate||"",time:"",endDate:"",endTime:"",code:"",address:"",note:"",photo:""});
+  const [err,setErr] = useState("");
+  const fileRef = useRef(null);
+  const hint = {"Lot":"np. WAW → BCN, LO 433","Pociąg":"np. IC Kraków → Gdańsk","Autobus":"np. FlixBus Wrocław → Praga","Prom":"np. Gdynia → Karlskrona","Nocleg":"Nazwa hotelu / apartamentu","Auto":"Wypożyczalnia, odbiór","Bilet":"np. Sagrada Família","Inne":"Co to za rezerwacja"}[f.type];
+  const endLbl = f.type==="Nocleg"?"Wymeldowanie":f.type==="Auto"?"Zwrot":"Przyjazd / koniec";
+  const photo = async (e) => {
+    const file = e.target.files&&e.target.files[0];e.target.value = "";
+    if(!file||!file.type.startsWith("image/")) return;
+    const data = await compressImage(file,1400,.75);
+    sF(p=>({...p,photo:data}));
+  };
+  const save = () => {
+    if(!f.title.trim()&&!f.code.trim()){setErr("Wpisz nazwę albo numer rezerwacji.");return}
+    if(f.date&&f.endDate&&(f.endDate+(f.endTime||""))<(f.date+(f.time||""))){setErr("Koniec nie może być przed początkiem.");return}
+    const list = trip.bookings||[];
+    upTrip({bookings:edit?list.map(b=>b.id===f.id?f:b):[...list,f]});setForm(null);setEdit(null);
+  };
+  return <div style={s.modal}><div style={s.mc}>
+    <h3 style={s.fT}>{edit?"Edytuj rezerwację":"Nowa rezerwacja"}</h3>
+    <div style={s.cG}>{Object.entries(BOOK_TYPES).map(([t,i])=><button key={t} onClick={()=>sF({...f,type:t})} aria-pressed={f.type===t} style={{...s.cB,...(f.type===t?{background:s.__ink2,color:s.__soft,borderColor:s.__ink2}:{})}}>{i} {t}</button>)}</div>
+    <input placeholder={hint} value={f.title} onChange={e=>{sF({...f,title:e.target.value});setErr("")}} style={s.inp}/>
+    <div style={s.formRow}>
+      <label style={s.dLbl}>{f.type==="Nocleg"?"Zameldowanie":"Wyjazd / start"}<input type="date" value={f.date} onChange={e=>{sF({...f,date:e.target.value});setErr("")}} style={{...s.inp,minWidth:0}}/></label>
+      <label style={{...s.dLbl,flex:"0 0 34%"}}>Godzina<input type="time" value={f.time} onChange={e=>sF({...f,time:e.target.value})} style={{...s.inp,minWidth:0}}/></label>
+    </div>
+    <div style={s.formRow}>
+      <label style={s.dLbl}>{endLbl}<input type="date" value={f.endDate} min={f.date||undefined} onChange={e=>{sF({...f,endDate:e.target.value});setErr("")}} style={{...s.inp,minWidth:0}}/></label>
+      <label style={{...s.dLbl,flex:"0 0 34%"}}>Godzina<input type="time" value={f.endTime} onChange={e=>sF({...f,endTime:e.target.value})} style={{...s.inp,minWidth:0}}/></label>
+    </div>
+    <input placeholder="Numer rezerwacji / PNR" value={f.code} onChange={e=>{sF({...f,code:e.target.value});setErr("")}} autoCapitalize="characters" style={{...s.inp,marginTop:8}}/>
+    <input placeholder="Adres (lotnisko, dworzec, hotel)" value={f.address} onChange={e=>sF({...f,address:e.target.value})} style={s.inp}/>
+    <textarea placeholder="Uwagi — miejsce, bramka, bagaż…" value={f.note} onChange={e=>sF({...f,note:e.target.value})} style={{...s.inp,minHeight:64,resize:"vertical"}}/>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+      {f.photo && <img src={f.photo} alt="Zdjęcie biletu" style={{width:64,height:48,objectFit:"cover",borderRadius:2}}/>}
+      <button onClick={()=>fileRef.current&&fileRef.current.click()} style={s.chipBtn}>{f.photo?"Zmień zdjęcie biletu":"+ Zdjęcie biletu"}</button>
+      {f.photo && <button onClick={()=>sF({...f,photo:""})} style={s.chipBtn}>Usuń</button>}
+      <input ref={fileRef} type="file" accept="image/*" onChange={photo} style={{display:"none"}}/>
+    </div>
+    {err && <p role="alert" style={s.fErr}>{err}</p>}
+    <div style={s.formRow}>
+      <button onClick={()=>{setForm(null);setEdit(null)}} className="vy-btn" style={s.b2}>Anuluj</button>
+      <button onClick={save} className="vy-btn" style={s.b1}>Zapisz</button>
+    </div>
+  </div></div>;
+}
+
 function NoteForm(){
   const {trip,upTrip,edit,setForm,setEdit,s} = useApp();
   const [f,sF] = useState(edit||{id:uid(),title:"",content:"",date:new Date().toISOString().split("T")[0],photos:[]});
@@ -1005,6 +1234,21 @@ export default function TravelPlanner(){
      (zwykle przez zdjęcia). Wcześniej błąd był połykany po cichu
      i dane znikały po restarcie — teraz użytkownik to widzi. */
   useEffect(()=>{setStorageFull(!saveTrips(trips))},[trips]);
+
+  /* Zdjęcie celu na okładkę — raz na podróż (cover===undefined), także dla starych
+     podróży. null zapisuje „szukano, nie ma” albo „usunięte przez użytkownika”. */
+  const coverJobs = useRef(new Set());
+  useEffect(()=>{
+    trips.forEach(t=>{
+      if(t.cover!==undefined||!t.destination||coverJobs.current.has(t.id)) return;
+      coverJobs.current.add(t.id);
+      destPhotos(t.destination).then(list=>{
+        coverJobs.current.delete(t.id);
+        if(list===null) return;
+        setTrips(p=>p.map(x=>x.id===t.id&&x.cover===undefined&&x.destination===t.destination?{...x,cover:list[0]||null}:x));
+      });
+    });
+  },[trips]);
   useEffect(()=>{saveDark(darkMode)},[darkMode]);
 
   const trip = trips.find(t=>t.id===active);
@@ -1015,6 +1259,7 @@ export default function TravelPlanner(){
     {form==="trip"&&<TripForm/>}
     {form==="place"&&trip&&<PlaceForm/>}
     {form==="expense"&&trip&&<ExpenseForm/>}
+    {form==="booking"&&trip&&<BookingForm/>}
     {form==="note"&&trip&&<NoteForm/>}
     {form==="itin"&&trip&&<ItinForm/>}
   </>;
@@ -1089,7 +1334,10 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}`;
 
 const mkStyles = (c) => ({
-  __accent:c.accent, __ok:c.ok, __muted:c.muted, __ink2:c.ink2,
+  __accent:c.accent, __ok:c.ok, __muted:c.muted, __ink2:c.ink2, __soft:c.paper2, __rule:c.rule,
+  coverBar:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 0 0",flexWrap:"wrap"},
+  coverCredit:{fontSize:10.5,color:c.muted,letterSpacing:".04em"},
+  bookCode:{display:"flex",alignItems:"center",gap:8,marginTop:6,fontFamily:"ui-monospace,Consolas,monospace",fontSize:14,fontWeight:700,letterSpacing:".08em",color:c.ink},
   pri:{high:c.accent,medium:c.gold,low:c.ok},
 
   app:{fontFamily:SANS,background:c.paper,color:c.ink,position:"fixed",top:0,left:0,right:0,bottom:0,display:"flex",flexDirection:"column",overflow:"hidden"},
