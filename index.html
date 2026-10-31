@@ -18,6 +18,15 @@
   <script type="module" src="/src/main.jsx"></script>
   <script>
     if ('serviceWorker' in navigator) {
+      // Nowy service worker przejął stronę (wdrożono nową wersję) — przeładuj raz,
+      // żeby od razu działał nowy kod. Przy pierwszej instalacji kontrolera nie było, więc bez przeładowania.
+      const hadController = !!navigator.serviceWorker.controller;
+      let reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadController || reloaded) return;
+        reloaded = true;
+        window.location.reload();
+      });
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js')
           .then(reg => console.log('SW registered'))

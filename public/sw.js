@@ -1,4 +1,4 @@
-const CACHE_NAME = 'voyager-v3';
+const CACHE_NAME = 'voyager-v4';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -33,8 +33,15 @@ self.addEventListener('fetch', event => {
   if (request.url.includes('api.opentripmap.com')) return;
   if (request.url.includes('wikipedia.org')) return;
 
+  // Strona (HTML) zawsze prosto z serwera — GitHub Pages daje max-age=600, więc zwykły
+  // fetch potrafił przez 10 minut po wdrożeniu oddawać starą wersję aplikacji.
+  // Pliki JS/CSS mają hash w nazwie, więc ich pamięć podręczna niczego nie psuje.
+  const fresh = request.mode === 'navigate'
+    ? fetch(request.url, { cache: 'no-store', credentials: 'same-origin' })
+    : fetch(request);
+
   event.respondWith(
-    fetch(request).then(response => {
+    fresh.then(response => {
       if (response.ok && request.url.startsWith('http')) {
         const clone = response.clone();
         caches.open(CACHE_NAME).then(cache => {
